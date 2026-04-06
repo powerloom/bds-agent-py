@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "bds-agent"
+version = "0.1.0"
+description = "CLI for BDS agents: signup, credits, run (agent.yaml), create"
+authors = ["Powerloom"]
+readme = "README.md"
+packages = [{ include = "bds_agent", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+httpx = "^0.27.0"
+typer = { version = "^0.15.4", extras = ["all"] }
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+ruff = "^0.9.0"
+
+[tool.poetry.scripts]
+bds-agent = "bds_agent.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
