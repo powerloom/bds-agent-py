@@ -2,7 +2,9 @@
 
 Python package and CLI for building agents on **Powerloom BDS** data markets.
 
-**Status**: `signup` and `credits` are wired to the [bds-agent-signup](https://github.com/powerloom/bds-agent-signup) HTTP API. `run` and `create` are still TBD.
+**Status**: `signup` and `credits` are wired to the [bds-agenthub-billing-metering](https://github.com/powerloom/bds-agenthub-billing-metering) HTTP API. `run` and `create` are still TBD.
+
+**→ [docs/USER_GUIDE.md](docs/USER_GUIDE.md)** — signup, profiles, balance, Tempo top-up (path to paid credits).
 
 ## Install
 
@@ -19,9 +21,12 @@ CLI: **[Typer](https://typer.tiangolo.com/)** + **httpx**.
 Environment (optional):
 
 - `BDS_AGENT_SIGNUP_URL` — signup service base URL (e.g. `http://127.0.0.1:8787`) if you omit `--base-url`
+- `BDS_AGENT_PROFILE` — credentials profile name (file: `profiles/<name>.json` under the config dir)
 - `BDS_DEV_TOPUP_SECRET` — must match server `DEV_TOPUP_SECRET` for dev-only `credits topup --amount`
 
-Credentials are stored under the platform config dir (e.g. `~/.config/bds-agent/credentials.json` on Linux/macOS).
+Credentials: **`~/.config/bds-agent/profiles/<profile>.json`** (plus **`active_profile`** after signup). Tempo wallet for **`credits topup`**: **`profiles/<profile>.tempo.env`**. Override with **`--profile`** / **`BDS_AGENT_PROFILE`**.
+
+If you still have a single **`~/.config/bds-agent/tempo.env`**, move it to **`profiles/<your-profile>.tempo.env`** (or re-run **`credits setup-tempo`**). With no profile selected, the CLI may still read the legacy file as a fallback.
 
 ## Commands
 
@@ -35,5 +40,4 @@ Credentials are stored under the platform config dir (e.g. `~/.config/bds-agent/
 
 ## Related
 
-- [mpp-bds-client](https://github.com/powerloom/mpp-bds-client) — reference Python client for MPP + BDS
-- [bds-agent-signup](https://github.com/powerloom/bds-agent-signup) — signup + API keys for agents
+- [bds-agenthub-billing-metering](https://github.com/powerloom/bds-agenthub-billing-metering) — signup + API keys for agents

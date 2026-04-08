@@ -9,6 +9,23 @@ class CreditsError(Exception):
     pass
 
 
+def credits_plans(base_url: str) -> dict[str, Any]:
+    """GET /credits/plans (public)."""
+    base = base_url.rstrip("/")
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(f"{base}/credits/plans")
+    if r.status_code != 200:
+        try:
+            detail = r.json()
+        except Exception:
+            detail = r.text
+        raise CreditsError(f"plans failed ({r.status_code}): {detail}")
+    data = r.json()
+    if not isinstance(data, dict):
+        raise CreditsError("Invalid JSON from credits/plans")
+    return data
+
+
 def credits_balance(base_url: str, api_key: str) -> dict[str, Any]:
     base = base_url.rstrip("/")
     with httpx.Client(timeout=30.0) as client:
@@ -48,6 +65,33 @@ def credits_topup(
     with httpx.Client(timeout=30.0) as client:
         r = client.post(f"{base}/credits/topup", json=body, headers=headers)
 
+    try:
+        data = r.json()
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        return data, r.status_code
+    return None, r.status_code
+
+
+def credits_topup_tempo(
+    base_url: str,
+    api_key: str,
+    *,
+    plan_id: str,
+    tempo_tx_hash: str,
+    tempo_chain_id: int,
+) -> tuple[dict[str, Any] | None, int]:
+    """POST /credits/topup with Tempo tx hash (after on-chain payment)."""
+    base = base_url.rstrip("/")
+    body = {
+        "plan_id": plan_id,
+        "tempo_tx_hash": tempo_tx_hash,
+        "tempo_chain_id": tempo_chain_id,
+    }
+    headers = {"Authorization": f"Bearer {api_key}"}
+    with httpx.Client(timeout=60.0) as client:
+        r = client.post(f"{base}/credits/topup", json=body, headers=headers)
     try:
         data = r.json()
     except Exception:

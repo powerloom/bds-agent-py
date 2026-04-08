@@ -25,6 +25,17 @@ def initiate_signup(client: httpx.Client, base_url: str, email: str, agent_name:
     if r.status_code == 429:
         ra = r.headers.get("Retry-After", "60")
         raise SignupError(f"Rate limited. Retry after {ra} seconds.")
+    if r.status_code == 409:
+        try:
+            detail = r.json()
+            if isinstance(detail, dict):
+                msg = detail.get("message") or detail.get("error", "Email already registered")
+                raise SignupError(str(msg))
+        except SignupError:
+            raise
+        except Exception:
+            pass
+        raise SignupError("This email is already registered.")
     if r.status_code not in (200, 201):
         try:
             detail = r.json()
