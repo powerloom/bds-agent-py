@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import sys
@@ -11,12 +12,15 @@ import typer
 
 from bds_agent import __version__
 from bds_agent.credentials import (
+    OPTIONAL_PROFILE_BDS_KEYS,
     describe_credentials_location,
     load_credentials,
+    resolve_credentials_path,
     resolve_profile_name,
     resolve_tempo_env_path,
     save_credentials,
     set_cli_profile,
+    update_profile_bds_fields,
 )
 from bds_agent.credits_api import (
     CreditsError,
@@ -29,6 +33,9 @@ from bds_agent.paths import default_profile_slug, sanitize_profile_name
 from bds_agent.signup_api import SignupError, default_signup_base_url, initiate_signup, poll_until_approved
 from bds_agent.console_ui import (
     print_balance,
+    print_config_init_skip,
+    print_config_init_success,
+    print_config_show,
     print_error,
     print_json_data,
     print_plan_pick_header,
@@ -57,6 +64,12 @@ app = typer.Typer(
 
 credits_app = typer.Typer(help="Credit balance and top-up.")
 app.add_typer(credits_app, name="credits")
+
+llm_app = typer.Typer(help="LLM backends for query/create (Anthropic Messages API, OpenAI, Ollama).")
+app.add_typer(llm_app, name="llm")
+
+config_app = typer.Typer(help="Store BDS defaults in the profile JSON (optional; reduces shell exports).")
+app.add_typer(config_app, name="config")
 
 _PROFILE_OPTION_HELP = (
     "Credentials profile (~/.config/bds-agent/profiles/<name>.json). "
@@ -336,18 +349,29 @@ def signup_cmd(
 
 @app.command("run")
 def run_cmd(
-    config: Optional[Path] = typer.Argument(
-        None,
+    config: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        readable=True,
         help="Path to agent.yaml",
     ),
+    profile: Optional[str] = typer.Option(
+        None,
+        "--profile",
+        "-P",
+        help=_PROFILE_OPTION_HELP + " Overrides auth.profile in the YAML.",
+        envvar="BDS_AGENT_PROFILE",
+    ),
 ) -> None:
-    """Run an agent from a declarative config (coming soon)."""
-    del config
-    print_error(
-        "bds-agent run: not implemented yet. "
-        "See mpp-bds-client (e.g. alert_agent.py) for a working BDS client example.",
-    )
-    raise typer.Exit(1)
+    """Run an agent: SSE stream → rules → sinks (see docs/AGENT_YAML.md)."""
+    _apply_profile_option(profile)
+    from bds_agent.runner import run_agent_sync
+
+    try:
+        run_agent_sync(config, profile_override=profile)
+    except KeyboardInterrupt:
+        raise typer.Exit(130)
 
 
 @app.command("create")
@@ -361,6 +385,284 @@ def create_cmd(
     del prompt
     print_error("bds-agent create: not implemented yet.")
     raise typer.Exit(1)
+
+
+@app.command("query")
+def query_cmd(
+    text: str = typer.Argument(
+        ...,
+        help="Natural language question; quote multi-word phrases",
+    ),
+    profile: ProfileCliOption = None,
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        "-b",
+        help="LLM backend (default: BDS_AGENT_LLM_BACKEND / llm.json / auto-detect)",
+        envvar="BDS_AGENT_LLM_BACKEND",
+    ),
+    execute: bool = typer.Option(
+        False,
+        "--execute",
+        "-x",
+        help="After resolving, call the BDS API (Bearer auth, metered routes consume credits)",
+    ),
+    base_url: Optional[str] = typer.Option(
+        None,
+        "--base-url",
+        help="Snapshotter origin for --execute. Overrides BDS_BASE_URL / profile bds_base_url.",
+        envvar="BDS_BASE_URL",
+    ),
+) -> None:
+    """Map natural language to a catalog endpoint + params (LLM); optionally execute the request."""
+    import asyncio
+
+    from bds_agent.catalog import (
+        CatalogError,
+        apply_agent_runtime_catalog_filter,
+        resolve_catalog,
+    )
+    from bds_agent.client import BdsClientError
+    from bds_agent.llm import LlmBackendNotConfiguredError, LlmError, resolve
+    from bds_agent.profile_env import resolve_bds_base_url
+    from bds_agent.query import QueryError, execute_resolution, translate_nl
+
+    _apply_profile_option(profile)
+
+    async def _run() -> None:
+        try:
+            catalog = resolve_catalog()
+            catalog = apply_agent_runtime_catalog_filter(catalog)
+        except CatalogError as exc:
+            print_error(str(exc))
+            raise typer.Exit(1) from exc
+
+        try:
+            llm_backend = resolve(cli_backend=backend)
+        except (LlmBackendNotConfiguredError, LlmError) as exc:
+            print_error(str(exc))
+            raise typer.Exit(1) from exc
+
+        try:
+            resolution = await translate_nl(text, catalog, llm_backend)
+        except QueryError as exc:
+            print_error(str(exc))
+            raise typer.Exit(1) from exc
+        except LlmError as exc:
+            print_error(str(exc))
+            raise typer.Exit(1) from exc
+
+        payload: dict[str, object] = {
+            "path": resolution.path_template,
+            "sse": resolution.sse,
+            "arguments": resolution.arguments,
+        }
+        if resolution.rationale:
+            payload["rationale"] = resolution.rationale
+        print_json_data(payload)
+
+        if not execute:
+            return
+
+        creds = load_credentials()
+        if not creds or not creds.get("api_key"):
+            print_error(
+                "No API key in profile. Run bds-agent signup or set --profile / BDS_AGENT_PROFILE.",
+            )
+            raise typer.Exit(1)
+
+        bu = resolve_bds_base_url(cli_override=base_url)
+        if not bu:
+            print_error(
+                "Set snapshotter origin for --execute: bds-agent config set bds_base_url <url>, "
+                "or BDS_BASE_URL, or --base-url.",
+            )
+            raise typer.Exit(1)
+
+        try:
+            result = await execute_resolution(
+                resolution=resolution,
+                catalog=catalog,
+                base_url=bu,
+                api_key=str(creds["api_key"]),
+            )
+        except QueryError as exc:
+            print_error(str(exc))
+            raise typer.Exit(1) from exc
+        except BdsClientError as exc:
+            print_error(str(exc))
+            raise typer.Exit(1) from exc
+
+        print_json_data(result)
+
+    try:
+        asyncio.run(_run())
+    except typer.Exit:
+        raise
+
+
+@app.command("mcp")
+def mcp_cmd(
+    profile: ProfileCliOption = None,
+    base_url: Optional[str] = typer.Option(
+        None,
+        "--base-url",
+        help="Snapshotter full node origin (no trailing slash). Overrides BDS_BASE_URL env and profile bds_base_url.",
+        envvar="BDS_BASE_URL",
+    ),
+) -> None:
+    """Run an MCP server on stdio: endpoint catalog → BDS HTTP tools (Bearer auth). Logs to stderr only."""
+    import logging
+    import sys
+
+    from bds_agent.catalog import (
+        CatalogError,
+        apply_agent_runtime_catalog_filter,
+        resolve_catalog,
+    )
+    from bds_agent.mcp.server import run_mcp_stdio
+    from bds_agent.profile_env import resolve_bds_base_url
+
+    _apply_profile_option(profile)
+    logging.basicConfig(
+        level=logging.WARNING,
+        stream=sys.stderr,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
+
+    creds = load_credentials()
+    if not creds or not creds.get("api_key"):
+        print_error(
+            "No API key in profile. Run bds-agent signup or set --profile / BDS_AGENT_PROFILE.",
+        )
+        raise typer.Exit(1)
+
+    bu = resolve_bds_base_url(cli_override=base_url)
+    if not bu:
+        print_error(
+            "Set snapshotter origin: bds-agent config set bds_base_url <url>, or BDS_BASE_URL, or --base-url.",
+        )
+        raise typer.Exit(1)
+
+    try:
+        catalog = resolve_catalog()
+        catalog = apply_agent_runtime_catalog_filter(catalog)
+    except CatalogError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+    try:
+        asyncio.run(
+            run_mcp_stdio(
+                catalog=catalog,
+                base_url=bu,
+                api_key=str(creds["api_key"]),
+            ),
+        )
+    except SystemExit as e:
+        raise typer.Exit(e.code) from e
+
+
+@config_app.command("init")
+def config_init_cmd(
+    profile: ProfileCliOption = None,
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite existing bds_base_url and bds_api_endpoints_catalog_json.",
+    ),
+) -> None:
+    """Set default BDS base URL and endpoints catalog URL on the profile (first-time setup)."""
+    from bds_agent.defaults import DEFAULT_BDS_BASE_URL, DEFAULT_ENDPOINTS_CATALOG_URL
+
+    _apply_profile_option(profile)
+    c = load_credentials()
+    if not c or not c.get("api_key"):
+        print_error("Need a profile with an api_key. Run bds-agent signup first.")
+        raise typer.Exit(1)
+
+    updates: dict[str, str] = {}
+    if force or not (str(c.get("bds_base_url") or "").strip()):
+        updates["bds_base_url"] = DEFAULT_BDS_BASE_URL
+    if force or not (str(c.get("bds_api_endpoints_catalog_json") or "").strip()):
+        updates["bds_api_endpoints_catalog_json"] = DEFAULT_ENDPOINTS_CATALOG_URL
+
+    if not updates:
+        print_config_init_skip()
+        raise typer.Exit(0)
+
+    try:
+        p = update_profile_bds_fields(updates, profile_name=profile)
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+    print_config_init_success(p, updates)
+
+
+@config_app.command("show")
+def config_show_cmd(profile: ProfileCliOption = None) -> None:
+    """Show optional BDS fields stored on the active profile (and effective env overlay)."""
+    _apply_profile_option(profile)
+    from bds_agent.profile_env import get_profile_env_overlay
+
+    c = load_credentials()
+    path = resolve_credentials_path()
+    if not c:
+        print_error("No profile credentials. Run bds-agent signup or set --profile / BDS_AGENT_PROFILE.")
+        raise typer.Exit(1)
+    ak = str(c.get("api_key") or "")
+    masked = f"{ak[:8]}…" if len(ak) > 8 else ("***" if ak else "(missing)")
+    profile_rows: list[tuple[str, str]] = [("api_key", masked)]
+    for k in OPTIONAL_PROFILE_BDS_KEYS:
+        v = c.get(k)
+        if isinstance(v, str) and v.strip():
+            profile_rows.append((k, v.strip()))
+    ov = get_profile_env_overlay()
+    print_config_show(path, profile_rows, ov)
+
+
+@config_app.command("set")
+def config_set_cmd(
+    key: str = typer.Argument(
+        ...,
+        help=f"One of: {', '.join(OPTIONAL_PROFILE_BDS_KEYS)}",
+    ),
+    value: str = typer.Argument(..., help="Value to store"),
+    profile: ProfileCliOption = None,
+) -> None:
+    """Set an optional BDS field on the profile JSON (same keys as bds-agent config show)."""
+    _apply_profile_option(profile)
+    if key.strip() not in OPTIONAL_PROFILE_BDS_KEYS:
+        print_error(f"Unknown key {key!r}. Allowed: {', '.join(OPTIONAL_PROFILE_BDS_KEYS)}")
+        raise typer.Exit(1)
+    try:
+        p = update_profile_bds_fields({key.strip(): value}, profile_name=profile)
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+    typer.echo(f"Updated {p}")
+
+
+@config_app.command("unset")
+def config_unset_cmd(
+    key: str = typer.Argument(
+        ...,
+        help=f"One of: {', '.join(OPTIONAL_PROFILE_BDS_KEYS)}",
+    ),
+    profile: ProfileCliOption = None,
+) -> None:
+    """Remove an optional BDS field from the profile JSON."""
+    _apply_profile_option(profile)
+    if key.strip() not in OPTIONAL_PROFILE_BDS_KEYS:
+        print_error(f"Unknown key {key!r}. Allowed: {', '.join(OPTIONAL_PROFILE_BDS_KEYS)}")
+        raise typer.Exit(1)
+    try:
+        p = update_profile_bds_fields({key.strip(): None}, profile_name=profile)
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+    typer.echo(f"Updated {p}")
 
 
 @credits_app.command("plans")
@@ -595,6 +897,140 @@ def credits_topup_cmd(
     else:
         print_error(f"Request failed (HTTP {code}).")
     raise typer.Exit(1)
+
+
+_LLM_BACKENDS = frozenset({"anthropic", "openai", "ollama", "local", "apfel"})
+
+
+@llm_app.command("status")
+def llm_status_cmd() -> None:
+    """Show active LLM backend and config file location."""
+    from bds_agent.llm.config_io import load_llm_json
+    from bds_agent.llm.resolve import auto_detect_backend_name, effective_backend_name
+    from bds_agent.paths import llm_json_path
+
+    path = llm_json_path()
+    typer.echo(f"llm.json: {path}  (exists: {path.is_file()})")
+    eff = effective_backend_name(cli_backend=None)
+    typer.echo(f"effective backend (env / file): {eff or '(none)'}")
+    try:
+        detected = auto_detect_backend_name()
+        typer.echo(f"auto-detect: {detected}")
+    except Exception as exc:
+        typer.echo(f"auto-detect: (not available) {exc}")
+    cfg = load_llm_json()
+    if cfg and cfg.backend:
+        typer.echo(f"llm.json backend field: {cfg.backend}")
+    has_a = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+    typer.echo(f"ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN set: {has_a}")
+    typer.echo(f"BDS_AGENT_LLM_BACKEND: {os.environ.get('BDS_AGENT_LLM_BACKEND', '') or '(unset)'}")
+
+
+@llm_app.command("list")
+def llm_list_cmd() -> None:
+    """List backends and whether they appear configured."""
+    from bds_agent.llm.anthropic import anthropic_api_key_from_env
+    from bds_agent.llm.config_io import load_llm_json
+    from bds_agent.llm.local import local_available
+    from bds_agent.llm.openai import openai_api_key_from_env
+    from bds_agent.llm.resolve import ollama_reachable
+
+    cfg = load_llm_json()
+    rows = [
+        (
+            "anthropic",
+            bool(anthropic_api_key_from_env() or (cfg and cfg.anthropic and cfg.anthropic.api_key)),
+        ),
+        ("openai", bool(openai_api_key_from_env() or (cfg and cfg.openai and cfg.openai.api_key))),
+        ("ollama", ollama_reachable()),
+        ("local", local_available()),
+        ("apfel", False),
+    ]
+    for name, ok in rows:
+        typer.echo(f"  {name:12}  {'ready' if ok else 'not configured'}")
+
+
+@llm_app.command("use")
+def llm_use_cmd(
+    backend: str = typer.Argument(..., help="anthropic | openai | ollama | local | apfel"),
+) -> None:
+    """Set the active backend in llm.json."""
+    from bds_agent.llm.config_io import load_llm_json, save_llm_json
+    from bds_agent.llm.schema import LlmJson
+
+    b = backend.strip().lower()
+    if b not in _LLM_BACKENDS:
+        print_error(f"Unknown backend {backend!r}. Choose one of: {', '.join(sorted(_LLM_BACKENDS))}.")
+        raise typer.Exit(1)
+    cfg = load_llm_json() or LlmJson()
+    cfg.backend = b
+    save_llm_json(cfg)
+    typer.echo(f"Active backend set to {b} (saved to llm.json).")
+
+
+@llm_app.command("setup")
+def llm_setup_cmd(
+    backend: str = typer.Argument(
+        ...,
+        help="anthropic (Anthropic Messages API) | openai | ollama",
+    ),
+) -> None:
+    """Interactive setup for an LLM backend (writes ~/.config/bds-agent/llm.json)."""
+    if not _stdin_is_tty():
+        print_error("setup requires an interactive terminal (TTY). Set env vars or edit llm.json manually.")
+        raise typer.Exit(1)
+    b = backend.strip().lower()
+    if b == "anthropic":
+        from bds_agent.llm.setup_interactive import setup_anthropic_interactive
+
+        setup_anthropic_interactive()
+        return
+    if b == "openai":
+        from bds_agent.llm.setup_interactive import setup_openai_interactive
+
+        setup_openai_interactive()
+        return
+    if b == "ollama":
+        from bds_agent.llm.setup_interactive import setup_ollama_interactive
+
+        setup_ollama_interactive()
+        return
+    print_error("Only anthropic, openai, and ollama setup are implemented (local GGUF / apfel: coming soon).")
+    raise typer.Exit(1)
+
+
+@llm_app.command("ping")
+def llm_ping_cmd(
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        "-b",
+        help="Override backend for this call (same names as bds-agent llm use).",
+    ),
+) -> None:
+    """Send a minimal completion request (tests API keys and base URL)."""
+    from bds_agent.llm import resolve
+    from bds_agent.llm.exceptions import LlmBackendNotConfiguredError, LlmError, LlmHttpError
+
+    async def _run() -> None:
+        llm = resolve(backend=backend)
+        text = await llm.complete(
+            "You are a connectivity test. Reply with exactly the single word: OK",
+            "ping",
+        )
+        typer.echo(text.strip())
+
+    try:
+        asyncio.run(_run())
+    except LlmBackendNotConfiguredError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+    except LlmHttpError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+    except LlmError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
 
 
 def main() -> None:

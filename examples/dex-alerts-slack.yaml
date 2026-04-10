@@ -1,0 +1,34 @@
+# Same as dex-alerts.yaml but also posts to Slack (Incoming Webhook).
+# export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+# export BDS_BASE_URL=...
+# poetry run bds-agent run examples/dex-alerts-slack.yaml --profile <profile>
+
+name: dex-alerts-slack
+version: 1
+
+source:
+  type: bds_stream
+  endpoint: /mpp/stream/allTrades
+  base_url: ${BDS_BASE_URL}
+
+auth:
+  profile: ${BDS_AGENT_PROFILE}
+
+rules:
+  - type: min_usd
+    threshold: 50000
+  - type: volume_spike
+    multiplier: 3.0
+    window_epochs: 10
+
+sinks:
+  - type: stdout
+  - type: slack
+    webhook_url: ${SLACK_WEBHOOK_URL}
+
+verify: false
+
+lifecycle:
+  reconnect: true
+  reconnect_delay: 5
+  max_reconnects: 0

@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "bds-agent"
 version = "0.1.0"
-description = "CLI for BDS agents: signup, credits, run (agent.yaml), create"
+description = "CLI for BDS agents: signup, credits, run, MCP (stdio), LLM backends"
 authors = ["Powerloom"]
 readme = "README.md"
 packages = [{ include = "bds_agent", from = "src" }]
@@ -10,8 +10,11 @@ packages = [{ include = "bds_agent", from = "src" }]
 python = "^3.12"
 httpx = "^0.27.0"
 rich = ">=13.0,<15"
-typer = { version = "^0.15.4", extras = ["all"] }
+typer = "^0.15.4"
 pympp = { version = "^0.5.4", extras = ["tempo"] }
+pyyaml = "^6.0.3"
+pydantic = "^2.12.5"
+mcp = ">=1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

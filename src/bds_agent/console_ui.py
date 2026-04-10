@@ -257,6 +257,137 @@ def print_tempo_setup_intro(profile_name: str, dest_path: Path) -> None:
     c.print()
 
 
+_CONFIG_FIELD_LABELS: dict[str, str] = {
+    "api_key": "API key",
+    "bds_base_url": "Snapshotter base URL",
+    "bds_api_endpoints_catalog_json": "Endpoints catalog (JSON)",
+    "bds_sources_json": "Sources manifest (JSON)",
+    "bds_market_name": "Data market name",
+}
+
+
+def print_config_init_success(path: Path, updates: dict[str, str]) -> None:
+    """Rich output after `bds-agent config init` writes defaults."""
+    c = _out()
+    c.print()
+    c.print(Rule("[bold bright_cyan]BDS agent config[/]", style="cyan"))
+    val_w = max(52, min(100, c.width - 40))
+    table = Table(
+        show_header=True,
+        box=box.ROUNDED,
+        header_style="bold cyan",
+        border_style="bright_black",
+        padding=(0, 1),
+    )
+    table.add_column("Setting", style="dim", min_width=26, no_wrap=True)
+    table.add_column("Value", overflow="fold", max_width=val_w)
+
+    for k, v in updates.items():
+        label = _CONFIG_FIELD_LABELS.get(k, k)
+        table.add_row(f"{label}  [dim]({k})[/]", escape(v))
+
+    c.print(
+        Panel(
+            Group(
+                Text.from_markup(f"[dim]Profile[/]  [cyan]{escape(str(path))}[/]"),
+                Text(""),
+                table,
+            ),
+            title="[bold green]✓ Defaults applied[/]",
+            border_style="green",
+            box=box.ROUNDED,
+        )
+    )
+    c.print(
+        "[dim]These values are used when[/] [cyan]BDS_BASE_URL[/] [dim]and[/] "
+        "[cyan]BDS_API_ENDPOINTS_CATALOG_JSON[/] [dim]are unset. Run[/] "
+        "[cyan]bds-agent config show[/] [dim]to review.[/]"
+    )
+    c.print()
+
+
+def print_config_init_skip() -> None:
+    """Profile already had BDS defaults; suggest --force."""
+    c = _out()
+    c.print()
+    c.print(
+        Panel(
+            "[bold yellow]Nothing to change[/]  —  this profile already has "
+            "[cyan]bds_base_url[/] and [cyan]bds_api_endpoints_catalog_json[/].\n\n"
+            "Pass [cyan]--force[/] to replace them with the packaged defaults.",
+            title="[dim]bds-agent config init[/]",
+            border_style="yellow",
+            box=box.ROUNDED,
+        )
+    )
+    c.print()
+
+
+def print_config_show(
+    path: Path | None,
+    profile_rows: list[tuple[str, str]],
+    overlay: dict[str, str],
+) -> None:
+    """Rich output for `bds-agent config show`."""
+    c = _out()
+    c.print()
+    c.print(Rule("[bold bright_cyan]Active profile[/]", style="cyan"))
+
+    path_line = (
+        f"[cyan]{escape(str(path))}[/]"
+        if path
+        else "[yellow](none selected)[/]"
+    )
+    c.print(f"[dim]File[/]  {path_line}")
+    c.print()
+
+    val_w = max(52, min(100, c.width - 40))
+    pt = Table(
+        show_header=True,
+        box=box.ROUNDED,
+        header_style="bold",
+        border_style="bright_black",
+        padding=(0, 1),
+    )
+    pt.add_column("Field", style="dim", min_width=26, no_wrap=True)
+    pt.add_column("Value", overflow="fold", max_width=val_w)
+    for key, val in profile_rows:
+        label = _CONFIG_FIELD_LABELS.get(key, key)
+        pt.add_row(f"{label}  [dim]({escape(key)})[/]", escape(val))
+
+    c.print(
+        Panel(
+            pt,
+            title="[bold]Stored in profile[/]",
+            border_style="cyan",
+            box=box.ROUNDED,
+        )
+    )
+    c.print()
+
+    c.print(
+        Rule(
+            "[dim]Environment overlay[/]  [dim italic](profile fills env when unset or empty)[/]",
+            style="dim",
+        )
+    )
+    if not overlay:
+        c.print("[dim]  (no BDS_* keys from profile — export vars or use config set)[/]")
+    else:
+        ot = Table(
+            show_header=True,
+            box=box.SIMPLE,
+            header_style="bold dim",
+            padding=(0, 1),
+        )
+        ot.add_column("Variable", style="cyan", no_wrap=True)
+        ot.add_column("Value", overflow="fold")
+        for ek, ev in sorted(overlay.items()):
+            ot.add_row(ek, escape(ev))
+        c.print(ot)
+    c.print()
+
+
 def print_tempo_saved(path: Path) -> None:
     c = _out()
     c.print(f"[bold green]✓[/] Saved wallet config  [cyan]{path}[/]")

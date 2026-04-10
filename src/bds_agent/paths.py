@@ -21,6 +21,14 @@ def profiles_dir() -> Path:
     return config_dir() / "profiles"
 
 
+def llm_json_path() -> Path:
+    return config_dir() / "llm.json"
+
+
+def models_dir() -> Path:
+    return config_dir() / "models"
+
+
 def active_profile_path() -> Path:
     """Plain-text file: one line, profile name for `profiles/<name>.json`."""
     return config_dir() / "active_profile"

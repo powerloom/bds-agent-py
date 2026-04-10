@@ -1,0 +1,27 @@
+name: dex-alerts
+version: 1
+
+source:
+  type: bds_stream
+  endpoint: /mpp/stream/allTrades
+  base_url: ${BDS_BASE_URL}
+
+auth:
+  profile: ${BDS_AGENT_PROFILE}
+
+rules:
+  - type: min_usd
+    threshold: 50000
+  - type: volume_spike
+    multiplier: 3.0
+    window_epochs: 10
+
+sinks:
+  - type: stdout
+
+verify: false
+
+lifecycle:
+  reconnect: true
+  reconnect_delay: 5
+  max_reconnects: 0
