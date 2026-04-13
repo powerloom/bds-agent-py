@@ -264,6 +264,20 @@ poetry run bds-agent create "Slack webhook alerts for volume spikes on all pools
 
 **Note:** This command does **not** invoke MCP; it only shares the catalog and LLM backends with **`mcp`** and **`query`**.
 
+### Create → run (full path)
+
+1. **Catalog + BDS origin + profile** — same as **`bds-agent query`** / **`mcp`** (e.g. **`bds-agent config init`**, or **`BDS_BASE_URL`** + **`BDS_API_ENDPOINTS_CATALOG_JSON`** / **`BDS_SOURCES_JSON`**).
+2. **`bds-agent create "…"`** — writes **`<name>.yaml`** (or **`-o`** path).
+3. **`bds-agent run <file>.yaml --profile NAME`** — loads **`agent.yaml`**, opens an SSE client to **`source.endpoint`** on **`source.base_url`** when **`source.type`** is **`bds_stream`**, runs **rules** on each epoch payload, delivers **alerts** to **sinks**.
+
+Typical NL-generated DEX agents use **`bds_stream`** + **`/mpp/stream/allTrades`** and **`stdout`** or webhooks. **Rule parameters** (`min_usd.threshold`, etc.) accept plain numbers or strings like **`50k`**; see **`docs/RULES.md`**.
+
+### Metering and SSE (`/mpp/stream/...`)
+
+The stream is **not** free: it is **`/mpp/...`**, which is **metered** on deployments that use **Bearer API keys** and **signup** billing (**`MPP_BILLING_MODE=signup_api`** on the snapshotter). The core API middleware **deducts credits once** when the **SSE request is accepted** (i.e. **per connection** / session start), **not** per epoch line inside the SSE body. The **`bds-agent`** client surfaces **`X-BDS-Credit-Balance`** from the stream where available.
+
+**If you need cost to scale with every epoch fetched**, use **`GET /mpp/snapshot/allTrades/{epoch}`** (or related snapshot routes) **per epoch** instead of the long-lived stream — see the coordination spec **BDS MPP integration** — **`09-streaming-session.md`** (metered snapshots vs optional SSE) and **`02-middleware.md`** (**`MPP_CHARGE_AMOUNT`** vs **`MPP_STREAM_AMOUNT`** under **`tempo`** / pympp).
+
 ## Local MCP server (`bds-agent mcp`)
 
 Runs a **Model Context Protocol** server on **stdio** (for Cursor, Claude Desktop, **Claude Code** CLI, and other MCP clients). Tools are generated from the same **`endpoints.json`** catalog as **`bds-agent run`** (see **API endpoint catalog** above). Each catalog route becomes one MCP tool; **GET** snapshot routes use **`fetch`**, **SSE** routes return a bounded list of events ( **`max_events`**, default **5**, max **50**).
@@ -335,8 +349,8 @@ Use the **API key** from your profile (see **Profiles and flags** above) for **`
 
 | API | Behavior |
 |-----|----------|
-| **`stream(...)`** | Long-lived SSE; exposes **`X-BDS-Credit-Balance`** on each connection via **`StreamChunk.credit_balance`**. |
-| **`fetch(...)`** | Single GET; **`FetchResult.credit_balance`** and **`FetchResult.data`**; non-2xx responses (including **402**) raise **`BdsClientError`**. |
+| **`stream(...)`** | Long-lived SSE to **`/mpp/stream/...`**; **`StreamChunk.credit_balance`** when the server sends **`X-BDS-Credit-Balance`**. With **signup-api** billing, credits are deducted **when the stream request is allowed** (see **Metering and SSE** above). |
+| **`fetch(...)`** | Single GET (e.g. **`/mpp/snapshot/...`**); **`FetchResult.credit_balance`** and **`FetchResult.data`**; non-2xx responses (including **402**) raise **`BdsClientError`**. |
 
 **`stream` reconnects:** after an error, waits **`reconnect_delay`** and retries (**`max_reconnects`**, default **0** = unlimited). After a normal end of the SSE body, failures are reset and the next connection starts without that delay.
 
