@@ -26,4 +26,4 @@ Rule classes live under **`bds_agent.rules`**; the registry is **`RULE_REGISTRY`
 
 1. **Same process**: `import bds_agent.rules`, build specs as **`dict`**, call **`evaluate_snapshot`**. Your code can wrap streams, fan out to other systems, or add rules.
 2. **Custom rule**: implement **`evaluate(epoch, pool, trades, state) -> list[Alert]`**, set **`type`**, add **`from_spec(cls, dict) -> Self`**, register: **`RULE_REGISTRY["my_rule"] = MyRule`** before **`build_rules`**. Keep **`type`** stable if you persist YAML.
-3. **Remote agent / LLM**: there is no separate schema service yet. The table above + **`tests/test_rules.py`** are the source of truth; **`bds-agent create`** embeds the same summary in its compiler prompt (`bds_agent.create`). Coord doc: **`bds-mpp-integration/12-agentic-framework.md`**.
+3. **Remote agent / LLM**: there is no separate schema service yet. The table above + **`tests/test_rules.py`** are the source of truth; **`bds-agent create`** embeds the same summary in its compiler prompt (`bds_agent.create`).

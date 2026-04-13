@@ -274,9 +274,11 @@ Typical NL-generated DEX agents use **`bds_stream`** + **`/mpp/stream/allTrades`
 
 ### Metering and SSE (`/mpp/stream/...`)
 
-The stream is **not** free: it is **`/mpp/...`**, which is **metered** on deployments that use **Bearer API keys** and **signup** billing (**`MPP_BILLING_MODE=signup_api`** on the snapshotter). The core API middleware **deducts credits once** when the **SSE request is accepted** (i.e. **per connection** / session start), **not** per epoch line inside the SSE body. The **`bds-agent`** client surfaces **`X-BDS-Credit-Balance`** from the stream where available.
+The stream is **not** free: it is **`/mpp/...`**, which is **metered** on deployments that use **Bearer API keys** and **signup** billing (**`MPP_BILLING_MODE=signup_api`** on the snapshotter). The core API middleware **deducts once** when the **SSE request is accepted** (**per connection**), **not** per `data:` line in the SSE body.
 
-**If you need cost to scale with every epoch fetched**, use **`GET /mpp/snapshot/allTrades/{epoch}`** (or related snapshot routes) **per epoch** instead of the long-lived stream — see the coordination spec **BDS MPP integration** — **`09-streaming-session.md`** (metered snapshots vs optional SSE) and **`02-middleware.md`** (**`MPP_CHARGE_AMOUNT`** vs **`MPP_STREAM_AMOUNT`** under **`tempo`** / pympp).
+**Credit policy (product):** **1 credit** per stream open is priced at parity with **720** successful **`GET /mpp/snapshot/...`** calls (**1/720 credit** each); the stream session is intended to deliver **up to 720 epochs** of events for that credit. **Implementation:** the metering service backing your deployment debits from the API key’s balance when the snapshotter accepts the request (one debit per stream **connection**, not per SSE event). How **`path`** maps to debit size is deployment-specific. **Resuming** a partially delivered entitlement (e.g. after disconnect) without paying again is **not** implemented in this CLI—it depends on server and metering behavior. The **`bds-agent`** client surfaces **`X-BDS-Credit-Balance`** when the server returns it.
+
+**If you need cost to scale linearly with every epoch** and no bundled “session,” use **`GET /mpp/snapshot/allTrades/{epoch}`** **per epoch** instead of the long-lived stream. On snapshotter deployments that bill via **Tempo** / pympp (**`MPP_BILLING_MODE=tempo`**), snapshot routes use **`MPP_CHARGE_AMOUNT`** and **`/mpp/stream/...`** uses **`MPP_STREAM_AMOUNT`**—configure with your operator.
 
 ## Local MCP server (`bds-agent mcp`)
 
