@@ -2,11 +2,51 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+# Int/float or strings like "50000", "50k", "$50,000", "1.5M" (when suffix allowed).
+_NUM_WITH_SUFFIX = re.compile(
+    r"^\s*([-+]?(?:\d+\.?\d*|\.\d+))\s*([kKmM])?\s*$",
+)
 
 
 def norm_pool(addr: str) -> str:
     return addr.strip().lower()
+
+
+def parse_rule_float(value: Any, *, allow_km_suffix: bool = False) -> float:
+    """
+    Parse a numeric YAML rule field from ``int`` / ``float`` or a string.
+
+    LLMs and humans sometimes write ``50k`` or ``\\$50,000`` for USD thresholds; YAML may also
+    mangle abbreviations. When ``allow_km_suffix`` is True, ``k`` / ``m`` multiply the base number.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"invalid numeric value: {value!r}")
+    if isinstance(value, (int, float)):
+        return float(value)
+    raw = str(value).strip().replace(",", "")
+    if not raw:
+        raise ValueError("empty numeric value")
+    if raw.startswith("$"):
+        raw = raw[1:].strip()
+    if not raw:
+        raise ValueError("empty numeric value")
+    if allow_km_suffix:
+        m = _NUM_WITH_SUFFIX.match(raw)
+        if m:
+            n = float(m.group(1))
+            suf = (m.group(2) or "").lower()
+            if suf == "k":
+                n *= 1_000.0
+            elif suf == "m":
+                n *= 1_000_000.0
+            return n
+    try:
+        return float(raw)
+    except ValueError as e:
+        raise ValueError(f"not a valid number: {value!r}") from e
 
 
 def trade_usd(trade: dict[str, Any]) -> float:

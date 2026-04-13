@@ -376,15 +376,85 @@ def run_cmd(
 
 @app.command("create")
 def create_cmd(
-    prompt: Optional[str] = typer.Argument(
-        None,
+    prompt: str = typer.Argument(
+        ...,
         help="Natural-language description of what the agent should do",
     ),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        "-b",
+        help="LLM backend (default: BDS_AGENT_LLM_BACKEND / llm.json / auto-detect)",
+        envvar="BDS_AGENT_LLM_BACKEND",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write agent config to this path (default: <name>.yaml in the current directory)",
+    ),
 ) -> None:
-    """Generate agent.yaml from a prompt via LLM (coming soon)."""
-    del prompt
-    print_error("bds-agent create: not implemented yet.")
-    raise typer.Exit(1)
+    """Generate agent.yaml from a prompt via LLM (same backends as ``bds-agent query``)."""
+    from rich.console import Console
+
+    from bds_agent.catalog import (
+        CatalogError,
+        apply_agent_runtime_catalog_filter,
+        resolve_catalog,
+    )
+    from bds_agent.create import (
+        CreateError,
+        agent_config_to_yaml_text,
+        compile_nl_to_agent_config,
+        default_output_filename,
+    )
+    from bds_agent.llm import LlmBackendNotConfiguredError, LlmError, resolve
+
+    async def _run() -> None:
+        try:
+            catalog = resolve_catalog()
+            catalog = apply_agent_runtime_catalog_filter(catalog)
+        except CatalogError as exc:
+            print_error(str(exc))
+            raise typer.Exit(1) from exc
+
+        try:
+            llm_backend = resolve(cli_backend=backend)
+        except (LlmBackendNotConfiguredError, LlmError) as exc:
+            print_error(str(exc))
+            raise typer.Exit(1) from exc
+
+        try:
+            cfg = await compile_nl_to_agent_config(prompt, catalog, llm_backend)
+        except CreateError as exc:
+            print_error(str(exc))
+            raise typer.Exit(1) from exc
+        except LlmError as exc:
+            print_error(str(exc))
+            raise typer.Exit(1) from exc
+
+        if output is not None:
+            out_path = output.expanduser().resolve()
+        else:
+            out_path = Path.cwd() / default_output_filename(cfg)
+
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(agent_config_to_yaml_text(cfg), encoding="utf-8")
+        except OSError as exc:
+            print_error(f"cannot write {out_path}: {exc}")
+            raise typer.Exit(1) from exc
+
+        c = Console(highlight=False, soft_wrap=True)
+        c.print(
+            f"[bold green]✓[/] Wrote [bold]{out_path}[/]\n"
+            f"Run with: [bold]bds-agent run {out_path}[/]  (optional: [bold]--profile[/] NAME)",
+        )
+
+    try:
+        asyncio.run(_run())
+    except typer.Exit:
+        raise
 
 
 @app.command("query")

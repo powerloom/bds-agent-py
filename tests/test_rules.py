@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from bds_agent.rules import (
     RuleState,
     build_rules,
     evaluate_snapshot,
     volume_window_for_rules,
 )
+from bds_agent.rules.helpers import parse_rule_float
 
 
 def _swap(usd: float) -> dict:
@@ -51,6 +54,26 @@ def test_volume_spike_rolling() -> None:
     out = evaluate_snapshot(3, snap3, st, rules)
     assert len(out) == 1
     assert out[0].rule == "volume_spike"
+
+
+def test_parse_rule_float_plain_and_suffix() -> None:
+    assert parse_rule_float(50000) == 50000.0
+    assert parse_rule_float("50k", allow_km_suffix=True) == 50_000.0
+    assert parse_rule_float("$50,000", allow_km_suffix=True) == 50_000.0
+    assert parse_rule_float("1.5M", allow_km_suffix=True) == 1_500_000.0
+    assert parse_rule_float("3.0", allow_km_suffix=False) == 3.0
+
+
+def test_parse_rule_float_rejects_garbage() -> None:
+    with pytest.raises(ValueError, match="not a valid number"):
+        parse_rule_float("k", allow_km_suffix=True)
+    with pytest.raises(ValueError, match="not a valid number"):
+        parse_rule_float("50k", allow_km_suffix=False)
+
+
+def test_min_usd_threshold_string_50k() -> None:
+    rules = build_rules([{"type": "min_usd", "threshold": "50k"}])
+    assert rules[0].threshold == 50_000.0
 
 
 def test_pool_filter_skips() -> None:

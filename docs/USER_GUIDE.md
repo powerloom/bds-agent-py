@@ -237,6 +237,33 @@ poetry run bds-agent query "latest all-pool trades per finalized epoch" -x --bas
 
 The model only chooses among **filtered** catalog paths (default **`/mpp`** — see **Catalog path filter** above). It must return a **`path`** that **exactly matches** a catalog entry (including `{placeholders}`). **SSE** routes default **`max_events`** to **5** if omitted. This command does **not** use MCP; it uses the same filtered catalog and HTTP stack as **`bds-agent mcp`** tools.
 
+## Generate `agent.yaml` (`bds-agent create`)
+
+Turns a **natural-language agent description** into a validated **`agent.yaml`** using the **same LLM stack** as **`bds-agent query`** (`bds_agent.create`: JSON Schema from **`AgentConfig`**, rule/sink summaries, **`endpoints.json`** excerpt). Output is written to disk; then run it with **`bds-agent run`**.
+
+**Requirements**
+
+| Requirement | Notes |
+|-------------|--------|
+| **Catalog** | Same as **`query`** / **`run`** / **`mcp`**: **`BDS_API_ENDPOINTS_CATALOG_JSON`** or **`BDS_SOURCES_JSON`** (+ optional **`BDS_MARKET_NAME`**) or profile fields. |
+| **LLM** | **`bds-agent llm setup …`**, env keys, or **`--backend`**. |
+
+**Flags**
+
+| Flag | Purpose |
+|------|---------|
+| **`--backend` / `-b`** | LLM backend name (overrides **`BDS_AGENT_LLM_BACKEND`** / **`llm.json`**). |
+| **`--output` / `-o`** | Write to this file path. Default: **`<name>.yaml`** in the current directory ( **`name`** from the generated config). |
+
+**Examples**
+
+```bash
+poetry run bds-agent create "Alert me on stdout when any Uniswap swap exceeds $50k USD"
+poetry run bds-agent create "Slack webhook alerts for volume spikes on all pools" --backend openai -o ./my-agent.yaml
+```
+
+**Note:** This command does **not** invoke MCP; it only shares the catalog and LLM backends with **`mcp`** and **`query`**.
+
 ## Local MCP server (`bds-agent mcp`)
 
 Runs a **Model Context Protocol** server on **stdio** (for Cursor, Claude Desktop, **Claude Code** CLI, and other MCP clients). Tools are generated from the same **`endpoints.json`** catalog as **`bds-agent run`** (see **API endpoint catalog** above). Each catalog route becomes one MCP tool; **GET** snapshot routes use **`fetch`**, **SSE** routes return a bounded list of events ( **`max_events`**, default **5**, max **50**).

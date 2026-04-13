@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from bds_agent.rules.helpers import epoch_swap_volume_usd, norm_pool
+from bds_agent.rules.helpers import epoch_swap_volume_usd, norm_pool, parse_rule_float
 from bds_agent.rules.state import Alert, RuleState
 
 
@@ -19,8 +19,12 @@ class VolumeSpikeRule:
     def from_spec(cls, spec: dict[str, Any]) -> VolumeSpikeRule:
         if "multiplier" not in spec:
             raise ValueError("volume_spike requires 'multiplier'")
-        win = int(spec.get("window_epochs", spec.get("window", 10)))
-        return cls(multiplier=float(spec["multiplier"]), window_epochs=win)
+        win_raw = spec.get("window_epochs", spec.get("window", 10))
+        win = int(parse_rule_float(win_raw, allow_km_suffix=False))
+        return cls(
+            multiplier=parse_rule_float(spec["multiplier"], allow_km_suffix=False),
+            window_epochs=max(1, win),
+        )
 
     def evaluate(
         self,

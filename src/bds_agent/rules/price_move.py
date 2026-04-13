@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from bds_agent.rules.helpers import is_swap, sqrt_price
+from bds_agent.rules.helpers import is_swap, parse_rule_float, sqrt_price
 from bds_agent.rules.state import Alert, RuleState
 
 
@@ -19,7 +19,9 @@ class PriceMoveRule:
         key = "threshold_bps" if "threshold_bps" in spec else "max_slippage_bps"
         if key not in spec:
             raise ValueError("price_move requires 'threshold_bps' (or legacy 'max_slippage_bps')")
-        return cls(threshold_bps=float(spec[key]))
+        return cls(
+            threshold_bps=parse_rule_float(spec[key], allow_km_suffix=False),
+        )
 
     def evaluate(
         self,

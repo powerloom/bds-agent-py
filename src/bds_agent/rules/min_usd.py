@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from bds_agent.rules.helpers import is_swap, trade_usd
+from bds_agent.rules.helpers import is_swap, parse_rule_float, trade_usd
 from bds_agent.rules.state import Alert, RuleState
 
 
@@ -18,7 +18,9 @@ class MinUsdRule:
     def from_spec(cls, spec: dict[str, Any]) -> MinUsdRule:
         if "threshold" not in spec:
             raise ValueError("min_usd requires 'threshold'")
-        return cls(threshold=float(spec["threshold"]))
+        return cls(
+            threshold=parse_rule_float(spec["threshold"], allow_km_suffix=True),
+        )
 
     def evaluate(
         self,
