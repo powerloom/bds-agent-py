@@ -10,7 +10,7 @@ Python package and CLI for building agents on **Powerloom BDS** data markets.
 
 **→ [docs/SINKS.md](docs/SINKS.md)** — alert sinks (`stdout`, `slack`, `telegram`, …).
 
-**→ [docs/AGENT_YAML.md](docs/AGENT_YAML.md)** — `agent.yaml` schema, **`${VAR}`** interpolation, **`auth`**. Example: **`examples/agent.example.yaml`**.
+**→ [docs/AGENT_YAML.md](docs/AGENT_YAML.md)** — `agent.yaml` schema, **`${VAR}`** interpolation, **`auth`**, optional **`verify`** (on-chain CID vs `maxSnapshotsCid`). Example: **`examples/agent.example.yaml`**.
 
 ## Install
 
@@ -82,7 +82,7 @@ If you still have a single **`~/.config/bds-agent/tempo.env`**, move it to **`pr
 | `bds-agent create "…"` | NL → **`agent.yaml`** (LLM + validation); **`--output`** / **`-o`** optional — see **`docs/USER_GUIDE.md`** |
 | `bds-agent llm status` / `setup` / `ping` | Configure and test LLM backends (`~/.config/bds-agent/llm.json`) |
 | `bds-agent mcp` | MCP server on stdio: catalog → BDS HTTP tools (Bearer); set **`BDS_BASE_URL`** (or profile **`bds_base_url`**) + catalog paths — see **`docs/USER_GUIDE.md`** → *Local MCP server* → *Testing (Cursor, Claude Desktop, or Claude Code CLI)* |
-| `bds-agent config init` | First-time defaults: **`https://bds.powerloom.io/api`** + public **`endpoints.json`** URL on the profile |
+| `bds-agent config init` | First-time defaults on the profile: BDS base URL + **`endpoints.json`** URL + Powerloom RPC + ProtocolState + DataMarket (for **`verify: true`**) — see **`docs/USER_GUIDE.md`** |
 | `bds-agent config show` / `set` / `unset` | View or edit profile BDS fields (alternative to env exports) |
 
 ## Related

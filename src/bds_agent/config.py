@@ -83,6 +83,9 @@ class AgentConfig(BaseModel):
     rules: list[dict[str, Any]] = Field(default_factory=list)
     sinks: list[dict[str, Any]] = Field(default_factory=list)
     verify: bool = False
+    verify_rpc_url: str | None = None
+    verify_protocol_state: str | None = None
+    verify_data_market: str | None = None
     lifecycle: LifecycleConfig | None = None
 
     @model_validator(mode="after")

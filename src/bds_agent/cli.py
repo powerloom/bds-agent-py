@@ -640,11 +640,17 @@ def config_init_cmd(
         False,
         "--force",
         "-f",
-        help="Overwrite existing bds_base_url and bds_api_endpoints_catalog_json.",
+        help="Overwrite packaged defaults for all fields this command sets (BDS + Powerloom verification).",
     ),
 ) -> None:
-    """Set default BDS base URL and endpoints catalog URL on the profile (first-time setup)."""
-    from bds_agent.defaults import DEFAULT_BDS_BASE_URL, DEFAULT_ENDPOINTS_CATALOG_URL
+    """Set default BDS URLs and Powerloom RPC / contract addresses on the profile (first-time setup)."""
+    from bds_agent.defaults import (
+        DEFAULT_BDS_BASE_URL,
+        DEFAULT_ENDPOINTS_CATALOG_URL,
+        DEFAULT_POWERLOOM_DATA_MARKET,
+        DEFAULT_POWERLOOM_PROTOCOL_STATE,
+        DEFAULT_POWERLOOM_RPC_URL,
+    )
 
     _apply_profile_option(profile)
     c = load_credentials()
@@ -657,6 +663,12 @@ def config_init_cmd(
         updates["bds_base_url"] = DEFAULT_BDS_BASE_URL
     if force or not (str(c.get("bds_api_endpoints_catalog_json") or "").strip()):
         updates["bds_api_endpoints_catalog_json"] = DEFAULT_ENDPOINTS_CATALOG_URL
+    if force or not (str(c.get("powerloom_rpc_url") or "").strip()):
+        updates["powerloom_rpc_url"] = DEFAULT_POWERLOOM_RPC_URL
+    if force or not (str(c.get("powerloom_protocol_state") or "").strip()):
+        updates["powerloom_protocol_state"] = DEFAULT_POWERLOOM_PROTOCOL_STATE
+    if force or not (str(c.get("powerloom_data_market") or "").strip()):
+        updates["powerloom_data_market"] = DEFAULT_POWERLOOM_DATA_MARKET
 
     if not updates:
         print_config_init_skip()

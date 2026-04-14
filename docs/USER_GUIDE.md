@@ -108,14 +108,21 @@ Instead of exporting many variables in every shell, store **optional** fields on
 | **`bds_api_endpoints_catalog_json`** | **`BDS_API_ENDPOINTS_CATALOG_JSON`** — local path **or HTTPS URL** to `endpoints.json` (e.g. raw GitHub). |
 | **`bds_sources_json`** | **`BDS_SOURCES_JSON`** — path to `sources.json`. |
 | **`bds_market_name`** | **`BDS_MARKET_NAME`** — data market name when using `sources.json`. |
+| **`powerloom_rpc_url`** | **`POWERLOOM_RPC_URL`** — Powerloom chain JSON-RPC for **`bds-agent run`** on-chain CID verification (`verify: true`). |
+| **`powerloom_protocol_state`** | **`POWERLOOM_PROTOCOL_STATE`** — optional ProtocolState address (**`eth_call`** **`to`**) for **`bds-agent run`** verification. |
+| **`powerloom_data_market`** | **`POWERLOOM_DATA_MARKET`** — optional DataMarket contract address (first argument to **`maxSnapshotsCid`** on ProtocolState). |
 
 **Precedence (each setting):** non-empty **environment variable** wins; otherwise the **profile** value is used. This applies to **`agent.yaml`** `${VAR}` interpolation (e.g. `${BDS_BASE_URL}`) and to **`bds_agent.catalog.resolve_catalog()`**.
+
+### On-chain snapshot verification (`bds-agent run`)
+
+When **`agent.yaml`** sets **`verify: true`**, the runner checks each event’s **`verification`** block against **`ProtocolState.maxSnapshotsCid(dataMarket, projectId, epochId)`** (the call is executed on ProtocolState and uses your DataMarket address as the first argument — see **`docs/AGENT_YAML.md`** → *Verification*). Configure JSON-RPC via **`verify_rpc_url`**, **`POWERLOOM_RPC_URL`**, or profile **`powerloom_rpc_url`**. Optional overrides: ProtocolState — **`verify_protocol_state`**, **`POWERLOOM_PROTOCOL_STATE`**, **`powerloom_protocol_state`**; DataMarket — **`verify_data_market`**, **`POWERLOOM_DATA_MARKET`**, **`powerloom_data_market`**. If unset, the stream’s **`verification.protocolState`** and **`verification.dataMarket`** are used. Mismatch triggers a console warning and an alert with **`rule: verification`** to your sinks.
 
 **CLI helpers**
 
 | Command | Purpose |
 |---------|---------|
-| **`bds-agent config init`** | First-time setup: writes **`bds_base_url`** (`https://bds.powerloom.io/api`) and **`bds_api_endpoints_catalog_json`** (public raw URL for the BDS Uniswap V3 branch `endpoints.json`). Skips keys that are already set; use **`--force`** to replace. |
+| **`bds-agent config init`** | First-time setup: writes **`bds_base_url`**, **`bds_api_endpoints_catalog_json`**, and Powerloom verification defaults on the profile — **`powerloom_rpc_url`** (`https://rpc-v2.powerloom.network/`), **`powerloom_protocol_state`**, **`powerloom_data_market`** (BDS mainnet alpha Uniswap V3 ETH deployment; same roles as **`POWERLOOM_RPC_URL`** / **`POWERLOOM_PROTOCOL_STATE`** / **`POWERLOOM_DATA_MARKET`**). Skips any key that is already set; use **`--force`** to replace all of these with the packaged defaults. |
 | **`bds-agent config show`** | Print stored BDS fields and the effective env overlay for the active profile. |
 | **`bds-agent config set <field> <value>`** | Set one optional field (see table above). |
 | **`bds-agent config unset <field>`** | Remove a field from the profile JSON. |

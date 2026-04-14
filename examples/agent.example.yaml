@@ -19,6 +19,13 @@ rules:
 sinks:
   - type: stdout
 
+# On-chain CID check: eth_call to ProtocolState.maxSnapshotsCid(dataMarket, projectId, epochId)
+# (needs verify_rpc_url or POWERLOOM_RPC_URL; set both contract addresses or rely on stream verification.*):
+# verify: true
+# verify_rpc_url: ${POWERLOOM_RPC_URL}
+# verify_protocol_state: "0x1d0e010Ff11b781CA1dE34BD25a0037203e25E2a"
+# verify_data_market: "0x26c44e5CcEB7Fe69Cffc933838CF40286b2dc01a"
+
 verify: false
 
 lifecycle:

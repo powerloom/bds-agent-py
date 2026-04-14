@@ -263,6 +263,9 @@ _CONFIG_FIELD_LABELS: dict[str, str] = {
     "bds_api_endpoints_catalog_json": "Endpoints catalog (JSON)",
     "bds_sources_json": "Sources manifest (JSON)",
     "bds_market_name": "Data market name",
+    "powerloom_rpc_url": "Powerloom chain JSON-RPC (verification)",
+    "powerloom_protocol_state": "ProtocolState contract (verification)",
+    "powerloom_data_market": "DataMarket contract (verification)",
 }
 
 
@@ -299,21 +302,23 @@ def print_config_init_success(path: Path, updates: dict[str, str]) -> None:
         )
     )
     c.print(
-        "[dim]These values are used when[/] [cyan]BDS_BASE_URL[/] [dim]and[/] "
-        "[cyan]BDS_API_ENDPOINTS_CATALOG_JSON[/] [dim]are unset. Run[/] "
-        "[cyan]bds-agent config show[/] [dim]to review.[/]"
+        "[dim]These values apply when the corresponding env vars are unset (see[/] "
+        "[cyan]docs/USER_GUIDE.md[/][dim]). Verification fields map to[/] "
+        "[cyan]POWERLOOM_RPC_URL[/][dim],[/] [cyan]POWERLOOM_PROTOCOL_STATE[/][dim],[/] "
+        "[cyan]POWERLOOM_DATA_MARKET[/][dim]. Run[/] [cyan]bds-agent config show[/] [dim]to review.[/]"
     )
     c.print()
 
 
 def print_config_init_skip() -> None:
-    """Profile already had BDS defaults; suggest --force."""
+    """Profile already had all fields that init would set; suggest --force."""
     c = _out()
     c.print()
     c.print(
         Panel(
-            "[bold yellow]Nothing to change[/]  —  this profile already has "
-            "[cyan]bds_base_url[/] and [cyan]bds_api_endpoints_catalog_json[/].\n\n"
+            "[bold yellow]Nothing to change[/]  —  this profile already has values for every "
+            "field [cyan]config init[/] would write ([cyan]bds_base_url[/], [cyan]bds_api_endpoints_catalog_json[/], "
+            "[cyan]powerloom_rpc_url[/], [cyan]powerloom_protocol_state[/], [cyan]powerloom_data_market[/]).\n\n"
             "Pass [cyan]--force[/] to replace them with the packaged defaults.",
             title="[dim]bds-agent config init[/]",
             border_style="yellow",

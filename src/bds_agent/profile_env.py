@@ -10,6 +10,9 @@ Profile file fields (optional, alongside ``api_key``):
 - ``bds_api_endpoints_catalog_json`` — path to ``endpoints.json`` (``BDS_API_ENDPOINTS_CATALOG_JSON``)
 - ``bds_sources_json`` — path to ``sources.json`` (``BDS_SOURCES_JSON``)
 - ``bds_market_name`` — market name (``BDS_MARKET_NAME``)
+- ``powerloom_rpc_url`` — Powerloom chain JSON-RPC (``POWERLOOM_RPC_URL``) for on-chain CID verification
+- ``powerloom_protocol_state`` — ProtocolState contract (``POWERLOOM_PROTOCOL_STATE``) override for verification
+- ``powerloom_data_market`` — DataMarket contract (``POWERLOOM_DATA_MARKET``) passed as the first argument to ``maxSnapshotsCid`` on ProtocolState
 """
 
 from __future__ import annotations
@@ -24,6 +27,9 @@ _ENV_FROM_PROFILE_FIELD: dict[str, str] = {
     "BDS_API_ENDPOINTS_CATALOG_JSON": "bds_api_endpoints_catalog_json",
     "BDS_SOURCES_JSON": "bds_sources_json",
     "BDS_MARKET_NAME": "bds_market_name",
+    "POWERLOOM_RPC_URL": "powerloom_rpc_url",
+    "POWERLOOM_PROTOCOL_STATE": "powerloom_protocol_state",
+    "POWERLOOM_DATA_MARKET": "powerloom_data_market",
 }
 
 

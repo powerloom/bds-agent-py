@@ -35,6 +35,9 @@ class Credentials(TypedDict, total=False):
     bds_api_endpoints_catalog_json: str
     bds_sources_json: str
     bds_market_name: str
+    powerloom_rpc_url: str
+    powerloom_protocol_state: str
+    powerloom_data_market: str
 
 
 # Optional fields merged on save so signup does not wipe operator defaults.
@@ -43,6 +46,9 @@ OPTIONAL_PROFILE_BDS_KEYS: tuple[str, ...] = (
     "bds_api_endpoints_catalog_json",
     "bds_sources_json",
     "bds_market_name",
+    "powerloom_rpc_url",
+    "powerloom_protocol_state",
+    "powerloom_data_market",
 )
 
 
