@@ -1,7 +1,8 @@
 # Same as dex-alerts.yaml but also posts to Slack (Incoming Webhook).
 # export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 # export BDS_BASE_URL=...
-# poetry run bds-agent run examples/dex-alerts-slack.yaml --profile <profile>
+# bds-agent run examples/dex-alerts-slack.yaml --profile <profile>
+# (from a clone without global install: uv run bds-agent run ...)
 
 name: dex-alerts-slack
 version: 1

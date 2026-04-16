@@ -14,21 +14,11 @@ Python package and CLI for building agents on **Powerloom BDS** data markets.
 
 ## Install
 
-### Poetry (repo virtualenv — typical for development)
+Install **[uv](https://docs.astral.sh/uv/)** once (standalone installer or your package manager).
 
-```bash
-pip install poetry
-cd bds-agent-py
-poetry install
-poetry run bds-agent --help
-poetry run bds-agent --version
-```
+### `uv tool install` (recommended — global `bds-agent` on `PATH`)
 
-The **`bds-agent`** script lives in that venv’s **`bin/`**; use **`poetry run bds-agent`** or **`poetry shell`** so it is on **`PATH`**.
-
-### `uv tool install` (global `bds-agent` on `PATH`)
-
-If you use **[uv](https://docs.astral.sh/uv/)**, you can install the CLI like **pipx**: one command on your user **`PATH`**, no **`poetry run`** prefix.
+Installs the CLI like **pipx**: one command on your user **`PATH`**, usable from any directory.
 
 ```bash
 cd bds-agent-py
@@ -46,9 +36,20 @@ Then **restart the MCP client** (or reconnect MCP) if you use **`bds-agent mcp`*
 
 **Alternative:** **`uv tool install --force --editable .`** links the tool to **`src/bds_agent`** in this checkout so you skip wheel rebuilds while editing; still restart MCP after code changes.
 
-Ensure **uv’s tool binary directory** is on your **`PATH`** (often **`~/.local/bin`**; **`uv tool update-shell`** can print the right line for your shell). Then **`bds-agent --help`** works from any directory. This also keeps **MCP** spawn lines minimal, e.g. **`claude mcp add bds-agent-local -- bds-agent mcp`** (see **`docs/USER_GUIDE.md`** → Local MCP).
+Ensure **uv’s tool binary directory** is on your **`PATH`** (often **`~/.local/bin`**; **`uv tool update-shell`** can print the right line for your shell). This keeps **MCP** spawn lines minimal, e.g. **`claude mcp add bds-agent-local -- bds-agent mcp`** (see **`docs/USER_GUIDE.md`** → Local MCP).
 
 When the package is published to PyPI, **`uv tool upgrade bds-agent`** upgrades the tool.
+
+### Development from a clone (no global `PATH` install)
+
+```bash
+cd bds-agent-py
+uv sync
+uv run bds-agent --help
+uv run bds-agent --version
+```
+
+Use **`uv run bds-agent …`** for every CLI invocation, or install with **`uv tool install .`** when you want a stable **`bds-agent`** on **`PATH`**.
 
 CLI: **[Typer](https://typer.tiangolo.com/)** + **httpx**.
 

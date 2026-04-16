@@ -6,12 +6,12 @@ This document lives in the **`bds-agent-py`** repository so it ships with the CL
 
 | Method | Use case |
 |--------|----------|
-| **Poetry** | Clone the repo, **`poetry install`**, then **`poetry run bds-agent …`** (or **`poetry shell`** and run **`bds-agent`**). The executable is only on **`PATH`** inside that project’s virtualenv unless you activate it. |
-| **`uv tool install`** | From the repo root: **`uv tool install .`** — installs **`bds-agent`** into uv’s tool environment and places it on your user **`PATH`** (similar to **pipx**). After **`git pull`** or when the CLI does not reflect your tree, run **`uv cache clean`** then **`uv tool install --force .`** (uv often reuses wheels/build cache when the package version is unchanged). After **any** reinstall, **restart the MCP host** if you use **`bds-agent mcp`**. Optional: **`uv tool install --force --editable .`** to load **`bds_agent`** from this checkout without rebuilding wheels while you edit. Put [uv](https://docs.astral.sh/uv/)’s tool **`bin`** on **`PATH`** (often **`~/.local/bin`**). |
+| **`uv tool install`** (recommended) | From the repo root: **`uv tool install .`** — installs **`bds-agent`** into uv’s tool environment and places it on your user **`PATH`** (similar to **pipx**). After **`git pull`** or when the CLI does not reflect your tree, run **`uv cache clean`** then **`uv tool install --force .`** (uv often reuses wheels/build cache when the package version is unchanged). After **any** reinstall, **restart the MCP host** if you use **`bds-agent mcp`**. Optional: **`uv tool install --force --editable .`** to load **`bds_agent`** from this checkout without rebuilding wheels while you edit. Put [uv](https://docs.astral.sh/uv/)’s tool **`bin`** on **`PATH`** (often **`~/.local/bin`**). |
+| **`uv run`** (clone, no global install) | From a clone: **`uv sync`** (uses **`uv.lock`**), then **`uv run bds-agent …`**. The CLI is **not** on your user **`PATH`** unless you prefix with **`uv run`** from the repo root (or a shell that has activated uv’s project env — not required). |
 
 **`uv tool` + MCP still stale:** Confirm **`which -a bds-agent`** — the first hit should be uv’s shim (e.g. **`~/.local/bin`**), not an older venv. Then **`uv cache clean`**, **`uv tool install --force .`**, and restart Cursor / Claude / the MCP connection.
 
-Examples in this guide use **`poetry run bds-agent`**; if you used **`uv tool install`**, drop the **`poetry run`** prefix (e.g. **`bds-agent signup`**).
+Examples in this guide use plain **`bds-agent`** (after **`uv tool install`**). If you only use **`uv run`** from a clone, prefix commands accordingly (e.g. **`uv run bds-agent signup`**).
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ Examples in this guide use **`poetry run bds-agent`**; if you used **`uv tool in
 
 ```bash
 export BDS_AGENT_SIGNUP_URL=https://bds-agent-metering.powerloom.network
-poetry run bds-agent signup
+bds-agent signup
 ```
 
 **Same thing via flag (no env):** `bds-agent signup --base-url https://bds-agent-metering.powerloom.network`
@@ -48,9 +48,9 @@ poetry run bds-agent signup
 ### 2. Check free tier
 
 ```bash
-poetry run bds-agent credits balance
+bds-agent credits balance
 # or, if you use multiple profiles:
-poetry run bds-agent credits balance --profile <profile>
+bds-agent credits balance --profile <profile>
 ```
 
 ### 3. (Optional) Preview pricing
@@ -58,7 +58,7 @@ poetry run bds-agent credits balance --profile <profile>
 No API key required for plans (only the metering URL):
 
 ```bash
-poetry run bds-agent credits plans
+bds-agent credits plans
 ```
 
 Each **top-up** buys **one plan** (e.g. one payment of `tempo_amount` → `credits` for that row). Repeat **`credits topup`** for another purchase.
@@ -68,7 +68,7 @@ Each **top-up** buys **one plan** (e.g. one payment of `tempo_amount` → `credi
 Tempo config is **per profile**: `~/.config/bds-agent/profiles/<profile>.tempo.env`. It is **only** used to **pay** for credits; **`/mpp/...` data requests** use the **API key** only.
 
 ```bash
-poetry run bds-agent credits setup-tempo --profile <profile>
+bds-agent credits setup-tempo --profile <profile>
 ```
 
 - Enter **private key** (hex).  
@@ -79,7 +79,7 @@ Fund this wallet with the plan’s token on the correct chain before **`topup`**
 ### 5. Buy credits (Tempo)
 
 ```bash
-poetry run bds-agent credits topup --profile <profile>
+bds-agent credits topup --profile <profile>
 ```
 
 The CLI submits an on-chain payment for the selected plan, then registers the tx with the metering service. On success, balance increases.
@@ -87,7 +87,7 @@ The CLI submits an on-chain payment for the selected plan, then registers the tx
 ### 6. Confirm balance
 
 ```bash
-poetry run bds-agent credits balance --profile <profile>
+bds-agent credits balance --profile <profile>
 ```
 
 ## Profiles and flags
@@ -237,9 +237,9 @@ Maps a **plain-English question** to one route from **`endpoints.json`** plus **
 **Examples**
 
 ```bash
-poetry run bds-agent query "all trades snapshot for epoch block 12345678"
-poetry run bds-agent query "stream all trades" --backend anthropic
-poetry run bds-agent query "latest all-pool trades per finalized epoch" -x --base-url https://bds.powerloom.io/api
+bds-agent query "all trades snapshot for epoch block 12345678"
+bds-agent query "stream all trades" --backend anthropic
+bds-agent query "latest all-pool trades per finalized epoch" -x --base-url https://bds.powerloom.io/api
 ```
 
 The model only chooses among **filtered** catalog paths (default **`/mpp`** — see **Catalog path filter** above). It must return a **`path`** that **exactly matches** a catalog entry (including `{placeholders}`). **SSE** routes default **`max_events`** to **5** if omitted. This command does **not** use MCP; it uses the same filtered catalog and HTTP stack as **`bds-agent mcp`** tools.
@@ -265,8 +265,8 @@ Turns a **natural-language agent description** into a validated **`agent.yaml`**
 **Examples**
 
 ```bash
-poetry run bds-agent create "Alert me on stdout when any Uniswap swap exceeds $50k USD"
-poetry run bds-agent create "Slack webhook alerts for volume spikes on all pools" --backend openai -o ./my-agent.yaml
+bds-agent create "Alert me on stdout when any Uniswap swap exceeds $50k USD"
+bds-agent create "Slack webhook alerts for volume spikes on all pools" --backend openai -o ./my-agent.yaml
 ```
 
 **Note:** This command does **not** invoke MCP; it only shares the catalog and LLM backends with **`mcp`** and **`query`**.
@@ -313,7 +313,7 @@ This server uses **stdio** only. The MCP client does **not** connect to a URL; i
 
 **Client configuration**
 
-- Set **`command`** (and **`args`**) so the child process is **`bds-agent mcp`** — for example **`poetry`** with **`args`**: `["run", "bds-agent", "mcp"]` and **`cwd`** set to the **`bds-agent-py`** repository if you use Poetry.
+- Set **`command`** (and **`args`**) so the child process runs **`bds-agent mcp`**. Prefer **`bds-agent`** on **`PATH`** (after **`uv tool install .`**). If you only have a clone, use **`uv`** with **`args`**: `["run", "bds-agent", "mcp"]` and **`cwd`** set to the **`bds-agent-py`** repository root (where **`pyproject.toml`** lives).
 - Pass **`env`**:
   - **Minimal:** **`BDS_AGENT_PROFILE=<profile>`** if **`config init`** (or manual **`config set`**) already stored **`bds_base_url`** and catalog URLs on that profile.
   - **Explicit:** **`BDS_BASE_URL`**, **`BDS_API_ENDPOINTS_CATALOG_JSON`** (path or HTTPS URL) or **`BDS_SOURCES_JSON`** + **`BDS_MARKET_NAME`**, plus **`BDS_AGENT_PROFILE`** as needed.
@@ -332,13 +332,13 @@ This server uses **stdio** only. The MCP client does **not** connect to a URL; i
 
   **`bds-agent-local`** is only a display label; use any name you like.
 
-  **Without** a global **`bds-agent`**, use Poetry from the repo (absolute **`poetry`** path if pyenv shims are not visible to the Claude Code process):
+  **Without** a global **`bds-agent`**, run through **`uv`** from the repo (absolute **`uv`** path if shims are not visible to the Claude Code process), with **`cwd`** = repo root:
 
   ```bash
-  claude mcp add bds-agent -- /path/to/poetry run bds-agent mcp
+  claude mcp add bds-agent -- /path/to/uv run bds-agent mcp
   ```
 
-  **`poetry run`** needs **`pyproject.toml`** in the child’s cwd unless you use the **`uv tool install`** approach.
+  **`uv run`** resolves the project from **`cwd`**; set **`cwd`** to the checkout that contains **`pyproject.toml`**, or install with **`uv tool install .`** once and use **`bds-agent mcp`** only.
 
   The project may store MCP entries in **`.claude.json`** (paths are project-scoped in the UI). After adding, **`/mcp`** should list the server as connected and expose one tool per **filtered** catalog route (see **Catalog path filter** above).
 
@@ -368,7 +368,7 @@ Use the **API key** from your profile (see **Profiles and flags** above) for **`
 If the metering server has **`DEV_TOPUP_SECRET`** set:
 
 ```bash
-poetry run bds-agent credits topup --amount 5 --dev-secret <secret>
+bds-agent credits topup --amount 5 --dev-secret <secret>
 ```
 
 `--amount` is in **credit units**, not token amount.
