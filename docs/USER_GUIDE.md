@@ -198,10 +198,13 @@ The client sends the base URL as the **origin only** (it appends **`/v1/messages
 
 ### Ollama
 
+Used by **`bds-agent query`**, **`bds-agent create`**, and **`bds-agent llm ping`** when **`BDS_AGENT_LLM_BACKEND=ollama`**, **`llm.json`** has `"backend": "ollama"`, or auto-detect finds a running Ollama (and no API keys take precedence). If you also have **`ANTHROPIC_API_KEY`** / **`OPENAI_API_KEY`**, set **`BDS_AGENT_LLM_BACKEND=ollama`** or run **`bds-agent llm use ollama`** so the local model is chosen.
+
 | Variable | Purpose |
 |----------|---------|
 | **`OLLAMA_HOST`** | Host or full URL (default `127.0.0.1:11434`). |
 | **`OLLAMA_MODEL`** | Tag name on the server. |
+| **`OLLAMA_NUM_CTX`** | Optional context size (passed as Ollama **`options.num_ctx`**). Use when **`query`** / **`create`** prompts exceed the default window (large **`endpoints.json`** catalog). |
 
 ### CLI reference
 
@@ -230,7 +233,7 @@ Maps a **plain-English question** to one route from **`endpoints.json`** plus **
 
 | Flag | Purpose |
 |------|---------|
-| **`--backend` / `-b`** | LLM backend name (overrides **`BDS_AGENT_LLM_BACKEND`** / **`llm.json`**). |
+| **`--backend` / `-b`** | LLM backend name. **Optional** if **`bds-agent llm use …`** or **`llm.json`** already set it — only pass to override one command. Same precedence as **`BDS_AGENT_LLM_BACKEND`**. |
 | **`--execute` / `-x`** | After resolving, **call** the BDS API (Bearer + metering). Requires **profile** API key and **`BDS_BASE_URL`** (or **`--base-url`** / profile **`bds_base_url`**). Metered routes consume credits. |
 | **`--profile` / `-P`** | Profile for **`--execute`** (and for consistency with other commands). |
 
@@ -259,7 +262,7 @@ Turns a **natural-language agent description** into a validated **`agent.yaml`**
 
 | Flag | Purpose |
 |------|---------|
-| **`--backend` / `-b`** | LLM backend name (overrides **`BDS_AGENT_LLM_BACKEND`** / **`llm.json`**). |
+| **`--backend` / `-b`** | LLM backend name. **Optional** if **`bds-agent llm use …`** or **`llm.json`** already set it — only pass to override one command. Same precedence as **`BDS_AGENT_LLM_BACKEND`**. |
 | **`--output` / `-o`** | Write to this file path. Default: **`<name>.yaml`** in the current directory ( **`name`** from the generated config). |
 
 **Examples**

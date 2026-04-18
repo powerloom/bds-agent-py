@@ -11,7 +11,8 @@ from bds_agent.llm.anthropic import AnthropicBackend, anthropic_api_key_from_env
 from bds_agent.llm.config_io import load_llm_json, save_llm_json
 from bds_agent.llm.exceptions import LlmBackendNotConfiguredError
 from bds_agent.llm.resolve import effective_backend_name, resolve
-from bds_agent.llm.schema import AnthropicSection, LlmJson
+from bds_agent.llm.ollama import OllamaBackend
+from bds_agent.llm.schema import AnthropicSection, LlmJson, OllamaSection
 
 
 def test_anthropic_api_key_prefers_explicit_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,6 +95,65 @@ def test_load_save_llm_json_roundtrip(tmp_path: Path, monkeypatch: pytest.Monkey
     assert loaded.anthropic is not None
     assert loaded.anthropic.model == "claude-sonnet-4-20250514"
     assert loaded.anthropic.api_key == "secret"
+
+
+def test_ollama_complete_extracts_message() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        assert body["model"] == "mistral"
+        assert body["messages"][0]["role"] == "system"
+        assert "options" not in body
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "hello"}},
+        )
+
+    transport = httpx.MockTransport(handler)
+
+    async def run() -> None:
+        async with httpx.AsyncClient(transport=transport) as client:
+            b = OllamaBackend(
+                base_url="http://127.0.0.1:11434",
+                model="mistral",
+                client=client,
+            )
+            out = await b.complete("sys", "user")
+            assert out == "hello"
+
+    asyncio.run(run())
+
+
+def test_ollama_num_ctx_in_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OLLAMA_NUM_CTX", "8192")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        assert body.get("options", {}).get("num_ctx") == 8192
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "ok"}},
+        )
+
+    transport = httpx.MockTransport(handler)
+
+    async def run() -> None:
+        async with httpx.AsyncClient(transport=transport) as client:
+            b = OllamaBackend.from_config(None, client=client)
+            await b.complete("s", "u")
+
+    asyncio.run(run())
+
+
+def test_effective_backend_prefers_llm_json_ollama_over_unset_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+    monkeypatch.delenv("BDS_AGENT_LLM_BACKEND", raising=False)
+    cfg = LlmJson(backend="ollama", ollama=OllamaSection(host="127.0.0.1:11434", model="llama3.2"))
+    save_llm_json(cfg)
+    assert effective_backend_name(cli_backend=None) == "ollama"
 
 
 def test_resolve_raises_without_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

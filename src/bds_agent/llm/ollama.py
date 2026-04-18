@@ -24,11 +24,13 @@ class OllamaBackend:
         *,
         base_url: str,
         model: str,
+        num_ctx: int | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
+        self._num_ctx = num_ctx
         self._timeout = timeout
         self._client = client
         self._owns_client = client is None
@@ -37,21 +39,37 @@ class OllamaBackend:
     def base_url(self) -> str:
         return self._base_url
 
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def num_ctx(self) -> int | None:
+        return self._num_ctx
+
     @classmethod
     def from_config(cls, section: Any, *, client: httpx.AsyncClient | None = None) -> OllamaBackend:
         host = "127.0.0.1:11434"
         model = "llama3.2"
+        num_ctx: int | None = None
         if section is not None:
             host = getattr(section, "host", None) or host
             model = getattr(section, "model", None) or model
+            num_ctx = getattr(section, "num_ctx", None)
         env_host = (os.environ.get("OLLAMA_HOST") or "").strip()
         if env_host:
             host = env_host
         env_model = (os.environ.get("OLLAMA_MODEL") or "").strip()
         if env_model:
             model = env_model
+        env_ctx = (os.environ.get("OLLAMA_NUM_CTX") or "").strip()
+        if env_ctx:
+            try:
+                num_ctx = int(env_ctx)
+            except ValueError:
+                pass
         base = _normalize_host(host)
-        return cls(base_url=base, model=model, client=client)
+        return cls(base_url=base, model=model, num_ctx=num_ctx, client=client)
 
     async def complete(self, system: str, user: str) -> str:
         url = f"{self._base_url}/api/chat"
@@ -59,11 +77,13 @@ class OllamaBackend:
         if system.strip():
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": user})
-        payload = {
+        payload: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
             "stream": False,
         }
+        if self._num_ctx is not None and self._num_ctx > 0:
+            payload["options"] = {"num_ctx": self._num_ctx}
         own = self._owns_client
         client = self._client or httpx.AsyncClient(timeout=self._timeout)
         try:

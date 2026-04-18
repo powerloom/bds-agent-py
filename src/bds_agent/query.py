@@ -20,7 +20,11 @@ class QueryError(Exception):
 
 
 def _strip_json_fence(s: str) -> str:
+    """Remove common ``` / ```json wrappers; leave inner text or unchanged prose."""
     t = s.strip()
+    m = re.search(r"```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```", t)
+    if m:
+        return m.group(1).strip()
     if not t.startswith("```"):
         return t
     lines = t.split("\n")
@@ -32,19 +36,24 @@ def _strip_json_fence(s: str) -> str:
 
 
 def _parse_llm_json(raw: str) -> dict[str, Any]:
+    """
+    Parse the first JSON object from model output.
+
+    Local models often add a short preamble and/or trailing commentary after the JSON;
+    ``json.loads`` on the whole string then fails with "Extra data". We take the first
+    ``{`` and decode exactly one value with :class:`json.JSONDecoder` ``raw_decode``.
+    """
     s = _strip_json_fence(raw)
+    s = s.strip()
+    start = s.find("{")
+    if start < 0:
+        raise QueryError("LLM response contains no JSON object (expected '{' … '}' )")
+    fragment = s[start:]
+    decoder = json.JSONDecoder()
     try:
-        data = json.loads(s)
+        data, _end = decoder.raw_decode(fragment)
     except json.JSONDecodeError as e:
-        # Try to extract a single JSON object if the model added prose
-        m = re.search(r"\{[\s\S]*\}", s)
-        if m:
-            try:
-                data = json.loads(m.group(0))
-            except json.JSONDecodeError:
-                raise QueryError(f"LLM response is not valid JSON: {e}") from e
-        else:
-            raise QueryError(f"LLM response is not valid JSON: {e}") from e
+        raise QueryError(f"LLM response is not valid JSON: {e}") from e
     if not isinstance(data, dict):
         raise QueryError("LLM JSON must be an object")
     return data

@@ -63,6 +63,7 @@ Environment (many are optional depending on the command):
 - **`BDS_BASE_URL`** — HTTP origin of the snapshotter API (public deploy: **`https://bds.powerloom.io/api`**; no trailing slash). Optional on disk: **`bds_base_url`** in **`profiles/<name>.json`** (see **`bds-agent config`**).
 - **`BDS_AGENT_CATALOG_PATH_PREFIXES`** — which path prefixes from **`endpoints.json`** are used for **`query`** / **`mcp`** / **`run`** (default **`/mpp`**; see **`docs/USER_GUIDE.md`** → *Catalog path filter*).
 - **`BDS_AGENT_LLM_BACKEND`** — `anthropic` / `openai` / `ollama` / … for **`bds-agent llm`**, **`query`**, and **`create`**
+- **`OLLAMA_HOST`**, **`OLLAMA_MODEL`**, **`OLLAMA_NUM_CTX`** — local Ollama (`ollama` backend); **`OLLAMA_NUM_CTX`** is optional (larger context for big **`endpoints.json`** prompts)
 - **`ANTHROPIC_API_KEY`** / **`ANTHROPIC_AUTH_TOKEN`**, **`ANTHROPIC_BASE_URL`**, **`ANTHROPIC_MODEL`** — Anthropic Messages API only (`anthropic` backend)
 
 Full tables and precedence: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** → **API endpoint catalog** and **LLM backends**.

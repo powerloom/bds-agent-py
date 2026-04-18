@@ -85,7 +85,11 @@ def setup_ollama_interactive() -> None:
     sec = cfg.ollama or OllamaSection()
     host = typer.prompt("Ollama host (host:port or http URL)", default=sec.host or "127.0.0.1:11434")
     model = typer.prompt("Model name", default=sec.model or "llama3.2")
-    cfg.ollama = OllamaSection(host=host.strip(), model=model.strip())
+    cfg.ollama = OllamaSection(
+        host=host.strip(),
+        model=model.strip(),
+        num_ctx=sec.num_ctx,
+    )
     cfg.backend = "ollama"
     save_llm_json(cfg)
     typer.echo(f"Saved LLM config: {_llm_path()}")

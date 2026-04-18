@@ -53,7 +53,8 @@ def auto_detect_backend_name() -> str:
         return "local"
     raise LlmBackendNotConfiguredError(
         "No LLM backend configured. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, "
-        "OPENAI_API_KEY, start Ollama, or run: bds-agent llm setup anthropic",
+        "OPENAI_API_KEY, start Ollama (or run: bds-agent llm setup ollama), "
+        "or run: bds-agent llm setup anthropic",
     )
 
 

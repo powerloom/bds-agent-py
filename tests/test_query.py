@@ -9,6 +9,7 @@ import pytest
 from bds_agent.mcp.registry import build_endpoint_tools
 from bds_agent.query import (
     QueryError,
+    _parse_llm_json,
     catalog_endpoints_json_for_prompt,
     resolution_from_llm_json,
     translate_nl,
@@ -19,6 +20,28 @@ from bds_agent.query import (
 def minimal_catalog() -> dict:
     path = Path(__file__).parent / "fixtures" / "endpoints.minimal.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_parse_llm_json_tolerates_trailing_prose() -> None:
+    """Local models often append text after the JSON object (json.loads → Extra data)."""
+    raw = (
+        '{"path": "/mpp/foo", "params": {"a": 1}, "rationale": "x"}\n\n'
+        "Let me know if you need anything else."
+    )
+    d = _parse_llm_json(raw)
+    assert d["path"] == "/mpp/foo"
+
+
+def test_parse_llm_json_prose_before_object() -> None:
+    raw = 'Sure, here is the route:\n{"path": "/x", "params": {}}'
+    d = _parse_llm_json(raw)
+    assert d["path"] == "/x"
+
+
+def test_parse_llm_json_markdown_fence() -> None:
+    raw = '```json\n{"path": "/y", "params": {}}\n```\n'
+    d = _parse_llm_json(raw)
+    assert d["path"] == "/y"
 
 
 def test_catalog_endpoints_json_for_prompt(minimal_catalog: dict) -> None:

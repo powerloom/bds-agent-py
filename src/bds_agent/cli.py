@@ -988,7 +988,8 @@ _LLM_BACKENDS = frozenset({"anthropic", "openai", "ollama", "local", "apfel"})
 def llm_status_cmd() -> None:
     """Show active LLM backend and config file location."""
     from bds_agent.llm.config_io import load_llm_json
-    from bds_agent.llm.resolve import auto_detect_backend_name, effective_backend_name
+    from bds_agent.llm.ollama import OllamaBackend
+    from bds_agent.llm.resolve import auto_detect_backend_name, effective_backend_name, ollama_reachable
     from bds_agent.paths import llm_json_path
 
     path = llm_json_path()
@@ -1006,6 +1007,13 @@ def llm_status_cmd() -> None:
     has_a = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
     typer.echo(f"ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN set: {has_a}")
     typer.echo(f"BDS_AGENT_LLM_BACKEND: {os.environ.get('BDS_AGENT_LLM_BACKEND', '') or '(unset)'}")
+    if (eff or "").lower() == "ollama" or (cfg and cfg.backend == "ollama"):
+        ob = OllamaBackend.from_config(cfg.ollama if cfg else None)
+        typer.echo(
+            f"Ollama: {ob.base_url}  model={ob.model}"
+            + (f"  num_ctx={ob.num_ctx}" if ob.num_ctx else "")
+        )
+        typer.echo(f"Ollama reachable (/api/tags): {ollama_reachable()}")
 
 
 @llm_app.command("list")

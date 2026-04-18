@@ -18,6 +18,8 @@ class LocalSection(BaseModel):
 class OllamaSection(BaseModel):
     host: str = "127.0.0.1:11434"
     model: str = "llama3.2"
+    # Larger context helps query/create with a full endpoints.json catalog (override server default).
+    num_ctx: int | None = None
 
 
 class AnthropicSection(BaseModel):
