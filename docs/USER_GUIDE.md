@@ -263,7 +263,7 @@ Turns a **natural-language agent description** into a validated **`agent.yaml`**
 | Flag | Purpose |
 |------|---------|
 | **`--backend` / `-b`** | LLM backend name. **Optional** if **`bds-agent llm use …`** or **`llm.json`** already set it — only pass to override one command. Same precedence as **`BDS_AGENT_LLM_BACKEND`**. |
-| **`--output` / `-o`** | Write to this file path. Default: **`<name>.yaml`** in the current directory ( **`name`** from the generated config). |
+| **`--output` / `-o`** | Write to this file path. Default: **`./gen-yaml/<name>.yaml`** (directory auto-created; gitignored by default so generated configs don't clutter the repo). |
 
 **Examples**
 
@@ -277,7 +277,7 @@ bds-agent create "Slack webhook alerts for volume spikes on all pools" --backend
 ### Create → run (full path)
 
 1. **Catalog + BDS origin + profile** — same as **`bds-agent query`** / **`mcp`** (e.g. **`bds-agent config init`**, or **`BDS_BASE_URL`** + **`BDS_API_ENDPOINTS_CATALOG_JSON`** / **`BDS_SOURCES_JSON`**).
-2. **`bds-agent create "…"`** — writes **`<name>.yaml`** (or **`-o`** path).
+2. **`bds-agent create "…"`** — writes **`./gen-yaml/<name>.yaml`** (or **`-o`** path).
 3. **`bds-agent run <file>.yaml --profile NAME`** — loads **`agent.yaml`**, opens an SSE client to **`source.endpoint`** on **`source.base_url`** when **`source.type`** is **`bds_stream`**, runs **rules** on each epoch payload, delivers **alerts** to **sinks**.
 
 Typical NL-generated DEX agents use **`bds_stream`** + **`/mpp/stream/allTrades`** and **`stdout`** or webhooks. **Rule parameters** (`min_usd.threshold`, etc.) accept plain numbers or strings like **`50k`**; see **`docs/RULES.md`**.

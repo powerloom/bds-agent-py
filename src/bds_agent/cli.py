@@ -391,7 +391,7 @@ def create_cmd(
         None,
         "--output",
         "-o",
-        help="Write agent config to this path (default: <name>.yaml in the current directory)",
+        help="Write agent config to this path (default: ./gen-yaml/<name>.yaml)",
     ),
 ) -> None:
     """Generate agent.yaml from a prompt via LLM (same backends as ``bds-agent query``)."""
@@ -436,7 +436,7 @@ def create_cmd(
         if output is not None:
             out_path = output.expanduser().resolve()
         else:
-            out_path = Path.cwd() / default_output_filename(cfg)
+            out_path = Path.cwd() / "gen-yaml" / default_output_filename(cfg)
 
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
