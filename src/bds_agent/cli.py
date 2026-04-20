@@ -275,7 +275,7 @@ def signup_cmd(
     base = (base_url or default_signup_base_url() or "").strip().rstrip("/")
     if not base:
         print_error(
-            "Set --base-url or BDS_AGENT_SIGNUP_URL to your signup service (e.g. https://api.example.com).",
+            "Set --base-url or BDS_AGENT_SIGNUP_URL to your signup service.",
         )
         raise typer.Exit(1)
 

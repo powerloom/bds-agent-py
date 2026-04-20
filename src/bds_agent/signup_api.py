@@ -11,9 +11,14 @@ class SignupError(Exception):
     """Signup flow failed."""
 
 
+DEFAULT_SIGNUP_BASE_URL = "https://bds-agent-metering.powerloom.io"
+
+
 def default_signup_base_url() -> str | None:
     u = os.environ.get("BDS_AGENT_SIGNUP_URL", "").strip()
-    return u.rstrip("/") or None
+    if u:
+        return u.rstrip("/")
+    return DEFAULT_SIGNUP_BASE_URL
 
 
 def initiate_signup(client: httpx.Client, base_url: str, email: str, agent_name: str) -> dict[str, Any]:
