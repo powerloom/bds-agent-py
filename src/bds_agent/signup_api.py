@@ -11,7 +11,7 @@ class SignupError(Exception):
     """Signup flow failed."""
 
 
-DEFAULT_SIGNUP_BASE_URL = "https://bds-agent-metering.powerloom.io"
+DEFAULT_SIGNUP_BASE_URL = "https://bds-metering.powerloom.io"
 
 
 def default_signup_base_url() -> str | None:

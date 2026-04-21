@@ -55,7 +55,7 @@ CLI: **[Typer](https://typer.tiangolo.com/)** + **httpx**.
 
 Environment (many are optional depending on the command):
 
-- **`BDS_AGENT_SIGNUP_URL`** — Metering service **origin** for **`bds-agent signup`** / credits (override **`--base-url`** on **`signup`**). **Default production:** `https://bds-agent-metering.powerloom.io`. **Local/dev:** e.g. `http://127.0.0.1:8787`. Saved as **`signup_base_url`** in the profile after signup (distinct from **`BDS_BASE_URL`** / snapshotter node—see **`docs/USER_GUIDE.md`**).
+- **`BDS_AGENT_SIGNUP_URL`** — Metering service **origin** for **`bds-agent signup`** / credits (override **`--base-url`** on **`signup`**). **Default production:** `https://bds-metering.powerloom.io`. **Local/dev:** e.g. `http://127.0.0.1:8787`. Saved as **`signup_base_url`** in the profile after signup (distinct from **`BDS_BASE_URL`** / snapshotter node—see **`docs/USER_GUIDE.md`**). Interactive signup/billing in the browser is on the same host at **`/metering`** (see **`docs/USER_GUIDE.md`**).
 - `BDS_AGENT_PROFILE` — credentials profile name (file: `profiles/<name>.json` under the config dir)
 - `BDS_DEV_TOPUP_SECRET` — must match server `DEV_TOPUP_SECRET` for dev-only `credits topup --amount`
 - **`BDS_API_ENDPOINTS_CATALOG_JSON`** — path or URL to `endpoints.json` for route catalog (`run` / `query` / `mcp` / `create` — see guide)

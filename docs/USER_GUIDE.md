@@ -16,7 +16,7 @@ Examples in this guide use plain **`bds-agent`** (after **`uv tool install`**). 
 ## Prerequisites
 
 1. **Metering service** running and reachable. It must expose **`GET /credits/plans`**, signup routes, and **`POST /credits/topup`** with Tempo/EVM verification configured (`MPP_TEMPO_RECIPIENT`, RPC, chain, seeded plans as needed). See the [bds-agenthub-billing-metering](https://github.com/powerloom/bds-agenthub-billing-metering) README.
-2. **Signup URL (before `bds-agent signup`):** the CLI uses the **metering service base URL** (same origin as signup and credits). **Default (Powerloom production):** **`https://bds-agent-metering.powerloom.io`** — override with **`BDS_AGENT_SIGNUP_URL`** or **`bds-agent signup --base-url …`** if you use a different deploy (e.g. **`http://127.0.0.1:8787`** self‑hosted). The URL used is saved as **`signup_base_url`** in **`profiles/<profile>.json`** for later **`credits`** commands (it is **not** the same as **`bds_base_url`** / snapshotter node; set those separately, e.g. **`bds-agent config init`** after signup).
+2. **Signup URL (before `bds-agent signup`):** the CLI uses the **metering service origin** (same host as signup APIs and credits: **`GET /credits/plans`**, **`POST /signup/initiate`**, **`POST /credits/topup`**). **Default (Powerloom production):** **`https://bds-metering.powerloom.io`** — override with **`BDS_AGENT_SIGNUP_URL`** or **`bds-agent signup --base-url …`** if you use a different deploy (e.g. **`http://127.0.0.1:8787`** self‑hosted). **Browser signup and billing UI** (Next static export) live on the **same host** at **`/metering`** — e.g. **`https://bds-metering.powerloom.io/metering`**. The URL used is saved as **`signup_base_url`** in **`profiles/<profile>.json`** for later **`credits`** commands (it is **not** the same as **`bds_base_url`** / snapshotter node; set those separately, e.g. **`bds-agent config init`** after signup).
 3. **On-chain top-up:** a wallet funded on the **same** chain and token as the plan (e.g. pathUSD on Moderato `42431` for the default seed plan).
 
 ## End-to-end path
@@ -28,11 +28,11 @@ Examples in this guide use plain **`bds-agent`** (after **`uv tool install`**). 
 **Production (typical):**
 
 ```bash
-export BDS_AGENT_SIGNUP_URL=https://bds-agent-metering.powerloom.io
+export BDS_AGENT_SIGNUP_URL=https://bds-metering.powerloom.io
 bds-agent signup
 ```
 
-**Same thing via flag (no env):** `bds-agent signup --base-url https://bds-agent-metering.powerloom.io`
+**Same thing via flag (no env):** `bds-agent signup --base-url https://bds-metering.powerloom.io`
 
 **Local / self-hosted:** use your billing origin instead, e.g. `export BDS_AGENT_SIGNUP_URL=http://127.0.0.1:8787` or the matching **`--base-url`**.
 
