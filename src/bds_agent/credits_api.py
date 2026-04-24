@@ -74,20 +74,20 @@ def credits_topup(
     return None, r.status_code
 
 
-def credits_topup_tempo(
+def credits_topup_onchain(
     base_url: str,
     api_key: str,
     *,
     plan_id: str,
-    tempo_tx_hash: str,
-    tempo_chain_id: int,
+    tx_hash: str,
+    chain_id: int,
 ) -> tuple[dict[str, Any] | None, int]:
-    """POST /credits/topup with Tempo tx hash (after on-chain payment)."""
+    """POST /credits/topup after a confirmed on-chain token transfer."""
     base = base_url.rstrip("/")
-    body = {
+    body: dict[str, Any] = {
         "plan_id": plan_id,
-        "tempo_tx_hash": tempo_tx_hash,
-        "tempo_chain_id": tempo_chain_id,
+        "tx_hash": tx_hash,
+        "chain_id": chain_id,
     }
     headers = {"Authorization": f"Bearer {api_key}"}
     with httpx.Client(timeout=60.0) as client:

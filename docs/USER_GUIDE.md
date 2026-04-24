@@ -61,7 +61,7 @@ No API key required for plans (only the metering URL):
 bds-agent credits plans
 ```
 
-Each **top-up** buys **one plan** (e.g. one payment of `tempo_amount` → `credits` for that row). Repeat **`credits topup`** for another purchase.
+Each **top-up** buys **one plan** (e.g. one payment of `token_amount` in `token_contract` → `credits` for that row). Repeat **`credits topup`** for another purchase.
 
 ### 4. Configure Tempo wallet (per profile)
 
@@ -75,6 +75,19 @@ bds-agent credits setup-tempo --profile <profile>
 - **TEMPO_RPC_URL** and **TEMPO_CHAIN_ID** default from **`GET /credits/plans`** when the service is reachable; otherwise Moderato defaults are offered. Press Enter to accept the shown default.
 
 Fund this wallet with the plan’s token on the correct chain before **`topup`**.
+
+### 4b. Pay-signup: generic EVM (optional, no browser)
+
+When the metering service exposes **`/signup/pay/quote`** and **`/signup/pay/claim`**, you can get an API key by paying on-chain: **ERC-20** `transfer` for normal plans, or a **plain native value** send to the treasury for chains where the plan uses the gas token (the CLI picks the right broadcast from the quote). Plan rows need **`token_symbol`** where required. Wallet file is per profile: **`~/.config/bds-agent/profiles/<profile>.evm.env`** (`EVM_PRIVATE_KEY`, optional `EVM_RPC_URL` / `EVM_CHAIN_ID`).
+
+You do **not** need a profile or API key before saving the wallet: run **`bds-agent credits setup-evm`** with no `--profile` and the CLI will ask for a profile name (it only names the file on disk). Or set **`export BDS_AGENT_PROFILE=myname`** once, then run **`setup-evm`**. Then run **`signup-pay`** (same profile is offered by default).
+
+```bash
+bds-agent credits setup-evm                    # or:  --profile <name>  /  BDS_AGENT_PROFILE
+bds-agent signup-pay --plan-id <id> --chain-id <eip155> --token-symbol <SYMBOL>
+```
+
+Pick **`--plan-id`**, **`--chain-id`**, and **`--token-symbol`** from **`bds-agent credits plans`** (same metering origin as device signup). The CLI uses **web3.py 7.x**; after a **`git pull`**, re-sync with **`uv sync`** (clone) or **`uv tool install --force .`** (global tool) like the [install table](#install-the-cli) above.
 
 ### 5. Buy credits (Tempo)
 

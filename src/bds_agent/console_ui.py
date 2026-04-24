@@ -19,6 +19,14 @@ from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 
+from bds_agent.plan_fields import (
+    bundle_primary_chain_id,
+    bundle_primary_recipient,
+    bundle_primary_rpc_url,
+    plan_token_amount,
+    plan_token_decimals,
+)
+
 
 def _out() -> Console:
     return Console(
@@ -128,10 +136,12 @@ def print_signup_success(
     c.print()
     c.print("[bold]What to do next[/]")
     next_rows = [
-        ("[cyan]bds-agent credits balance[/]", "See free-tier balance"),
-        ("[cyan]bds-agent credits plans[/]", "View pricing (no API key)"),
-        ("[cyan]bds-agent credits setup-tempo[/]", "Save wallet for on-chain top-up"),
-        ("[cyan]bds-agent credits topup[/]", "Buy credits (prompts if needed)"),
+        ("[cyan]bds-agent credits balance[/]", "See balance — your purchase plus any welcome credits"),
+        ("[cyan]bds-agent credits plans[/]", "View plans and prices"),
+        ("[cyan]bds-agent credits setup-tempo[/]", "Save Tempo wallet for credits top-up"),
+        ("[cyan]bds-agent credits setup-evm[/]", "Save Ethereum wallet (pay-signup, on-chain top-up)"),
+        ("[cyan]bds-agent credits topup[/]", "Buy more credits on a plan you pick"),
+        ("[cyan]bds-agent signup-pay[/]", "Get another API key via wallet payment (no browser)"),
     ]
     t = Table(show_header=False, box=None, padding=(0, 2))
     t.add_column("Command", style="bold")
@@ -162,12 +172,16 @@ def print_plans_bundle(data: dict[str, Any]) -> None:
     meta = Table(show_header=False, box=None, padding=(0, 1))
     meta.add_column(style="dim")
     meta.add_column()
-    if data.get("tempo_recipient"):
-        meta.add_row("Pay to", str(data["tempo_recipient"]))
-    if data.get("tempo_chain_id") is not None:
-        meta.add_row("Chain ID", str(data["tempo_chain_id"]))
-    if data.get("tempo_rpc_url"):
-        meta.add_row("RPC", str(data["tempo_rpc_url"]))
+    meta.add_row("Default for [cyan]credits topup[/]", "Pay-to address and network for that command. All plans and networks are in the table below.")
+    pay_to = bundle_primary_recipient(data)
+    if pay_to:
+        meta.add_row("Pay to", pay_to)
+    pcid = bundle_primary_chain_id(data)
+    if pcid is not None:
+        meta.add_row("Chain ID", str(pcid))
+    prpc = bundle_primary_rpc_url(data)
+    if prpc:
+        meta.add_row("RPC", prpc)
     eu = data.get("epoch_unit") or {}
     if isinstance(eu, dict) and eu.get("note"):
         meta.add_row("Epochs", str(eu.get("note")))
@@ -188,17 +202,16 @@ def print_plans_bundle(data: dict[str, Any]) -> None:
     for pl in plans:
         pid = str(pl.get("id", ""))
         credits = pl.get("credits", "")
-        amt = pl.get("tempo_amount", "")
-        dec = pl.get("tempo_decimals")
+        amt = plan_token_amount(pl)
+        dec = plan_token_decimals(pl)
         pay = str(amt)
-        if dec is not None:
-            pay = f"{amt} (decimals {dec})"
+        pay = f"{amt} (decimals {dec})"
         label = str(pl.get("label", "") or pl.get("description", ""))[:64]
         table.add_row(pid, str(credits), pay, label)
 
     c.print(table)
     c.print()
-    c.print("[dim]Each top-up buys one plan = one on-chain payment for that row’s credits.[/]")
+    c.print("[dim]One purchase per plan row, on the chain and token that row shows.[/]")
     c.print()
 
 

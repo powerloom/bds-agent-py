@@ -68,7 +68,7 @@ Environment (many are optional depending on the command):
 
 Full tables and precedence: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** → **API endpoint catalog** and **LLM backends**.
 
-Credentials: **`~/.config/bds-agent/profiles/<profile>.json`** (plus **`active_profile`** after signup). Tempo wallet for **`credits topup`**: **`profiles/<profile>.tempo.env`**. Override with **`--profile`** / **`BDS_AGENT_PROFILE`**.
+Credentials: **`~/.config/bds-agent/profiles/<profile>.json`** (plus **`active_profile`** after signup). Tempo wallet for **`credits topup`**: **`profiles/<profile>.tempo.env`**. Generic EVM key for **`signup-pay`**: **`profiles/<profile>.evm.env`**. Override with **`--profile`** / **`BDS_AGENT_PROFILE`**.
 
 If you still have a single **`~/.config/bds-agent/tempo.env`**, move it to **`profiles/<your-profile>.tempo.env`** (or re-run **`credits setup-tempo`**). With no profile selected, the CLI may still read the legacy file as a fallback.
 
@@ -77,7 +77,9 @@ If you still have a single **`~/.config/bds-agent/tempo.env`**, move it to **`pr
 | Command | Purpose |
 |---------|---------|
 | `bds-agent signup` | Device-auth flow; saves API key locally |
+| `bds-agent signup-pay` | Wallet-funded API key (no browser); see **`docs/USER_GUIDE.md`** |
 | `bds-agent credits balance` | Credit balance and rate limits |
+| `bds-agent credits setup-evm` | Save generic EVM key for pay-signup / on-chain (non-Tempo) |
 | `bds-agent credits topup` | Billing link when checkout exists; dev `--amount` + `--dev-secret` on staging |
 | `bds-agent run <agent.yaml>` | SSE stream → rules → sinks (see `docs/AGENT_YAML.md`) |
 | `bds-agent query "…"` | NL → endpoint + params (LLM); optional **`--execute`** to call BDS — see **`docs/USER_GUIDE.md`** |

@@ -8,6 +8,12 @@ import stat
 from pathlib import Path
 
 from bds_agent.credentials import resolve_tempo_env_path
+from bds_agent.plan_fields import (
+    bundle_primary_chain_id,
+    bundle_primary_recipient,
+    bundle_primary_rpc_url,
+    plan_token_amount,
+)
 
 
 def write_tempo_env_file(
@@ -44,9 +50,9 @@ def format_plans_json(data: dict) -> str:
     plans = data.get("plans") or []
     if not isinstance(plans, list):
         return json.dumps(data, indent=2)
-    lines.append(f"tempo_recipient: {data.get('tempo_recipient', '')}")
-    lines.append(f"tempo_chain_id: {data.get('tempo_chain_id', '')}")
-    lines.append(f"tempo_rpc_url: {data.get('tempo_rpc_url', '')}")
+    lines.append(f"primary_recipient: {bundle_primary_recipient(data)}")
+    lines.append(f"primary_chain_id: {bundle_primary_chain_id(data)}")
+    lines.append(f"primary_rpc_url: {bundle_primary_rpc_url(data)}")
     eu = data.get("epoch_unit") or {}
     if isinstance(eu, dict):
         lines.append(f"epoch_unit: {eu.get('note', '')}")
@@ -57,7 +63,7 @@ def format_plans_json(data: dict) -> str:
         if not pl.get("active", True):
             continue
         pid = pl.get("id", "")
-        amt = pl.get("tempo_amount", "")
+        amt = plan_token_amount(pl)
         cr = pl.get("credits", "")
         lines.append(
             f"  plan {pid}: pay {amt} token → {cr} credits  ({pl.get('label', '')})",

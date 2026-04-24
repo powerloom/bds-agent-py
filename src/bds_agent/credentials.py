@@ -9,6 +9,7 @@ from typing import Any, TypedDict
 
 from bds_agent.paths import (
     active_profile_path,
+    evm_env_path_for_profile,
     profiles_dir,
     sanitize_profile_name,
     tempo_env_path_for_profile,
@@ -107,6 +108,14 @@ def resolve_tempo_env_path() -> Path | None:
     if not n:
         return None
     return tempo_env_path_for_profile(n)
+
+
+def resolve_evm_env_path() -> Path | None:
+    """Per-profile generic EVM file: profiles/<name>.evm.env; None if no profile is selected."""
+    n = resolve_profile_name()
+    if not n:
+        return None
+    return evm_env_path_for_profile(n)
 
 
 def describe_credentials_location() -> str:

@@ -9,6 +9,8 @@ from typing import Annotated, Any, Optional
 
 import httpx
 import typer
+from eth_account import Account
+from rich import print as rprint
 
 from bds_agent import __version__
 from bds_agent.credentials import (
@@ -16,21 +18,36 @@ from bds_agent.credentials import (
     describe_credentials_location,
     load_credentials,
     resolve_credentials_path,
+    resolve_evm_env_path,
     resolve_profile_name,
     resolve_tempo_env_path,
     save_credentials,
     set_cli_profile,
     update_profile_bds_fields,
+    write_active_profile_name,
 )
 from bds_agent.credits_api import (
     CreditsError,
     credits_balance,
     credits_plans,
     credits_topup,
-    credits_topup_tempo,
+    credits_topup_onchain,
 )
 from bds_agent.paths import default_profile_slug, sanitize_profile_name
+from bds_agent.plan_fields import (
+    bundle_primary_chain_id,
+    bundle_primary_recipient,
+    bundle_primary_rpc_url,
+    plan_chain_id,
+)
+from bds_agent.evm_config import load_evm_env_file, write_evm_env_file
+from bds_agent.evm_erc20 import (
+    is_native_value_plan_token,
+    send_erc20_transfer,
+    send_native_value_transfer,
+)
 from bds_agent.signup_api import SignupError, default_signup_base_url, initiate_signup, poll_until_approved
+from bds_agent.signup_pay_api import signup_pay_claim, signup_pay_quote
 from bds_agent.console_ui import (
     print_balance,
     print_config_init_skip,
@@ -72,8 +89,8 @@ config_app = typer.Typer(help="Store BDS defaults in the profile JSON (optional;
 app.add_typer(config_app, name="config")
 
 _PROFILE_OPTION_HELP = (
-    "Credentials profile (~/.config/bds-agent/profiles/<name>.json). "
-    "Also: BDS_AGENT_PROFILE env, or active_profile after signup."
+    "Profile label: names the credentials JSON and per-profile wallet files (~/.config/bds-agent/profiles/<name>.*). "
+    "Use BDS_AGENT_PROFILE or set before first sign-up. After device signup, active_profile may point here."
 )
 
 
@@ -113,6 +130,33 @@ def _credits_root(
 _AGENT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
+def _ensure_profile_name_for_wallet(*, default_suggestion: str) -> str:
+    """When no --profile / env / active_profile, pick a name so .evm.env / .tempo.env paths exist before API key."""
+    n = resolve_profile_name()
+    if n:
+        return n
+    if not _stdin_is_tty():
+        print_error(
+            "No profile selected. Set  export BDS_AGENT_PROFILE=<name>  or run:  "
+            "bds-agent credits --profile <name> setup-evm  (no sign-up or JSON file required — only the name).",
+        )
+        raise typer.Exit(1)
+    rprint(
+        "[dim]First time: we only need a name for your wallet file on this machine. "
+        "It does not require an API key or sign-up yet.[dim]"
+    )
+    raw = typer.prompt("Profile name", default=default_suggestion, show_default=True)
+    raw = (raw or "").strip() or default_suggestion
+    try:
+        name = sanitize_profile_name(raw)
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+    set_cli_profile(name)
+    write_active_profile_name(name)
+    return name
+
+
 def _prompt_profile_name(agent_name: str) -> str:
     """Label for saved credentials file (~/.config/bds-agent/profiles/<name>.json)."""
     default = default_profile_slug(agent_name)
@@ -145,19 +189,17 @@ def _tempo_defaults_from_plans() -> tuple[str, str]:
         data = credits_plans(base)
     except CreditsError:
         return DEFAULT_TEMPO_RPC, DEFAULT_TEMPO_CHAIN
-    rpc = str(data.get("tempo_rpc_url") or "").strip() or DEFAULT_TEMPO_RPC
-    tid = data.get("tempo_chain_id")
+    rpc = bundle_primary_rpc_url(data) or DEFAULT_TEMPO_RPC
+    tid = bundle_primary_chain_id(data)
     chain = str(int(tid)) if tid is not None else DEFAULT_TEMPO_CHAIN
     return rpc, chain
 
 
 def _interactive_setup_tempo() -> bool:
     """Prompt for Tempo key and RPC/chain; write profiles/<profile>.tempo.env. Returns True if saved."""
+    _ensure_profile_name_for_wallet(default_suggestion="default")
     pname = resolve_profile_name()
     if not pname:
-        print_error(
-            "Tempo wallet is per profile. Use --profile / BDS_AGENT_PROFILE, or run signup so active_profile exists.",
-        )
         return False
     out_path = resolve_tempo_env_path()
     if out_path is None:
@@ -345,6 +387,214 @@ def signup_cmd(
     )
 
     print_signup_success(saved_path, org_id, profile_name=profile_name)
+
+
+@app.command("signup-pay")
+def signup_pay_cmd(
+    profile: ProfileCliOption = None,
+    base_url: Optional[str] = typer.Option(
+        None,
+        "--base-url",
+        help="Metering base URL (default: BDS_AGENT_SIGNUP_URL or saved signup_base_url)",
+    ),
+    agent_name: Optional[str] = typer.Option(
+        None,
+        "--agent-name",
+        "-n",
+        help="Label for this agent (letters, digits, _, -)",
+    ),
+    email: Optional[str] = typer.Option(
+        None,
+        "--email",
+        "-e",
+        help="Optional; if set, must be unique (same as browser signup).",
+    ),
+    plan_id: str = typer.Option(..., "--plan-id", help="Plan id from GET /credits/plans"),
+    chain_id: int = typer.Option(
+        ...,
+        "--chain-id",
+        help="EIP-155 chain id (must match the plan row and your wallet network).",
+    ),
+    token_symbol: str = typer.Option(
+        ...,
+        "--token-symbol",
+        help="Token symbol for that plan (see token_symbol in GET /credits/plans).",
+    ),
+    quote_only: bool = typer.Option(
+        False,
+        "--quote-only",
+        help="Only call POST /signup/pay/quote and print the instructions (no transfer).",
+    ),
+) -> None:
+    """Headless signup: get a pay quote, send the on-chain payment, then claim your API key.
+
+    ERC-20 plans: `transfer` to the quoted recipient. Native / CGT plans: a plain value send to
+    the treasury. Requires a funded wallet in profiles/<profile>.evm.env (`bds-agent credits setup-evm`).
+    """
+    _apply_profile_option(profile)
+    if not agent_name or not str(agent_name).strip():
+        agent_name = typer.prompt("Agent name")
+    agent_name = str(agent_name).strip()
+    if not _AGENT_NAME_RE.match(agent_name):
+        print_error(
+            "Agent name must be 1–64 characters: letters, digits, underscore, hyphen.",
+        )
+        raise typer.Exit(1)
+    _ensure_profile_name_for_wallet(default_suggestion=default_profile_slug(agent_name))
+    if email and ("@" not in str(email) or len(str(email)) > 254):
+        print_error("Invalid email.")
+        raise typer.Exit(1)
+    el = (email or "").strip()
+    if el:
+        email = el
+    else:
+        email = None
+
+    base, _ = _resolve_api_base(base_url)
+    if not base:
+        print_error("Set --base-url or BDS_AGENT_SIGNUP_URL, or run device signup once to save the URL.")
+        raise typer.Exit(1)
+
+    load_evm_env_file()
+    pk = (os.environ.get("EVM_PRIVATE_KEY") or "").strip()
+    if not pk or pk == "0x":
+        pth = resolve_evm_env_path()
+        hint = f" {pth}" if pth else ""
+        print_error(
+            f"Set EVM_PRIVATE_KEY or run: bds-agent credits setup-evm{hint} (see `bds-agent credits setup-evm --help`)."
+        )
+        raise typer.Exit(1)
+    if not pk.startswith("0x"):
+        pk = "0x" + pk
+
+    waddr = str(Account.from_key(pk).address)
+
+    qbody: dict[str, Any] = {
+        "agent_name": agent_name,
+        "plan_id": plan_id.strip(),
+        "chain_id": int(chain_id),
+        "token_symbol": token_symbol.strip(),
+        "payer_address": waddr,
+    }
+    if email:
+        qbody["email"] = email
+
+    with httpx.Client(timeout=60.0) as client:
+        data, code = signup_pay_quote(client, base, qbody)
+    if code not in (200, 201):
+        err = data.get("error", "request_failed")
+        msg = data.get("message", str(data))
+        print_error(f"Quote failed ({code}): {err} — {msg}")
+        raise typer.Exit(1)
+    sn = str(data.get("signup_nonce", "") or "")
+    if not sn:
+        print_error("Invalid quote response: missing signup_nonce.")
+        raise typer.Exit(1)
+    rpc_exec = (os.environ.get("EVM_RPC_URL") or "").strip() or str(data.get("rpc_hint", "") or "").strip()
+    if not quote_only and not rpc_exec:
+        print_error(
+            "Set EVM_RPC_URL in the profile .evm.env (or pass a public RPC) — needed to broadcast the transfer.",
+        )
+        raise typer.Exit(1)
+    c_hint = int(data.get("chain_id", chain_id))
+    recip = str(data.get("recipient", "") or "")
+    token_c = str(data.get("token_contract", "") or "")
+    amt_s = str(data.get("amount_atomic", "") or "")
+    pay_native = (str(data.get("payment_kind", "") or "").strip() == "native_value") or is_native_value_plan_token(
+        token_c
+    )
+    if not recip or not amt_s:
+        print_error("Invalid quote: missing recipient or amount_atomic.")
+        raise typer.Exit(1)
+    if not pay_native and not token_c:
+        print_error("Invalid quote: missing token_contract (ERC-20 plan).")
+        raise typer.Exit(1)
+    try:
+        amt_i = int(amt_s, 10)
+    except ValueError:
+        print_error("Invalid amount_atomic in quote.")
+        raise typer.Exit(1)
+    if pay_native:
+        rprint(
+            f"[bold]Pay-signup quote[/]  plan={plan_id}  chain_id={c_hint}\n"
+            f"  Send {amt_s} wei (chain native / CGT) to treasury {recip}\n"
+            f"  From: {waddr}  (expires: {data.get('expires_at', '')})",
+        )
+    else:
+        rprint(
+            f"[bold]Pay-signup quote[/]  plan={plan_id}  chain_id={c_hint}\n"
+            f"  Send {amt_s} wei of token {token_c} to {recip}\n"
+            f"  From: {waddr}  (expires: {data.get('expires_at', '')})",
+        )
+    if quote_only:
+        rprint(
+            f"[dim]Next: fund and send the transfer, then run again without --quote-only, "
+            f"or call POST {base.rstrip('/')}/signup/pay/claim with signup_nonce and tx_hash.[/]",
+        )
+        return
+
+    if not typer.confirm(
+        "Broadcast native transfer now?" if pay_native else "Broadcast ERC-20 transfer now?",
+        default=True,
+    ):
+        raise typer.Exit(0)
+    from web3 import Web3
+
+    w3p = Web3(Web3.HTTPProvider(rpc_exec, request_kwargs={"timeout": 5}))
+    if not w3p.is_connected():
+        print_error("Could not connect to EVM_RPC_URL / rpc_hint RPC.")
+        raise typer.Exit(1)
+    if int(w3p.eth.chain_id) != c_hint:
+        print_error(
+            f"RPC is chain {w3p.eth.chain_id} but the quote is for {c_hint}. Fix EVM_RPC_URL or chain.",
+        )
+        raise typer.Exit(1)
+    try:
+        if pay_native:
+            txh = send_native_value_transfer(
+                rpc_exec,
+                pk,
+                recip,
+                amt_i,
+                c_hint,
+            )
+        else:
+            txh = send_erc20_transfer(
+                rpc_exec,
+                pk,
+                token_c,
+                recip,
+                amt_i,
+                c_hint,
+            )
+    except Exception as ex:
+        print_error(f"Transfer failed: {ex}")
+        raise typer.Exit(1)
+    rprint(f"[green]tx[/] {txh}  — claiming API key…")
+    with httpx.Client(timeout=120.0) as client:
+        cdata, ccode = signup_pay_claim(client, base, sn, txh)
+    if ccode not in (200, 201):
+        err = cdata.get("error", "claim_failed")
+        msg = cdata.get("message", str(cdata))
+        print_error(f"Claim failed ({ccode}): {err} — {msg}")
+        raise typer.Exit(1)
+    api_key = cdata.get("api_key", "")
+    if not isinstance(api_key, str) or not api_key.startswith("sk_live_"):
+        print_error("Invalid claim response: missing api_key.")
+        raise typer.Exit(1)
+    org_id = str(cdata.get("org_id", ""))
+    prof = resolve_profile_name()
+    if not prof:
+        prof = _prompt_profile_name(agent_name)
+    saved = save_credentials(
+        {
+            "api_key": api_key,
+            "org_id": org_id,
+            "signup_base_url": base,
+        },
+        profile_name=prof,
+    )
+    print_signup_success(saved, org_id, profile_name=prof)
 
 
 @app.command("run")
@@ -784,11 +1034,10 @@ def credits_setup_tempo_cmd(
 ) -> None:
     """Save Tempo wallet to profiles/<profile>.tempo.env (interactive; used only for credits top-up)."""
     _apply_profile_option(profile)
+    _ensure_profile_name_for_wallet(default_suggestion="default")
     path = resolve_tempo_env_path()
     if path is None:
-        print_error(
-            "Tempo config is per profile. Set --profile / BDS_AGENT_PROFILE or run signup first.",
-        )
+        print_error("Could not resolve Tempo config path (internal).")
         raise typer.Exit(1)
     if path.is_file() and not force:
         if _stdin_is_tty():
@@ -799,6 +1048,60 @@ def credits_setup_tempo_cmd(
             raise typer.Exit(1)
     if not _interactive_setup_tempo():
         raise typer.Exit(1)
+
+
+@credits_app.command("setup-evm")
+def credits_setup_evm_cmd(
+    profile: ProfileCliOption = None,
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite existing .evm.env without asking",
+    ),
+) -> None:
+    """Save an Ethereum private key for pay-to-signup and standard on-chain credit purchases (per profile)."""
+    _apply_profile_option(profile)
+    _ensure_profile_name_for_wallet(default_suggestion="default")
+    path = resolve_evm_env_path()
+    if path is None:
+        print_error("Could not resolve EVM config path (internal).")
+        raise typer.Exit(1)
+    if path.is_file() and not force:
+        if _stdin_is_tty():
+            if not typer.confirm(f"{path} already exists. Overwrite?", default=False):
+                raise typer.Exit(0)
+        else:
+            print_error(f"{path} exists. Use --force to overwrite.")
+            raise typer.Exit(1)
+    pname = resolve_profile_name() or "profile"
+    rpc_def, chain_def = _tempo_defaults_from_plans()
+    rprint(
+        f"Used for [cyan]signup-pay[/] and on-chain top-ups on the networks in [cyan]credits plans[/]. "
+        f"For [cyan]credits topup[/] (Tempo) use [cyan]credits setup-tempo[/] — that is a different wallet file. "
+        f"Profile [cyan]{pname}[/] → {path}",
+    )
+    key = typer.prompt("EVM private key (hex)", hide_input=True)
+    if not key or not str(key).strip():
+        print_error("No key entered.")
+        raise typer.Exit(1)
+    rpc = typer.prompt(
+        "EVM_RPC_URL",
+        default=rpc_def,
+        show_default=True,
+    ).strip() or rpc_def
+    chain = typer.prompt(
+        "Chain ID (optional; must match the network you pay on)",
+        default=chain_def,
+        show_default=True,
+    ).strip() or chain_def
+    out = write_evm_env_file(
+        str(key).strip(),
+        rpc_url=rpc or None,
+        chain_id=chain or None,
+        path=path,
+    )
+    rprint(f"[green]Saved[/] {out}")
 
 
 @credits_app.command("balance")
@@ -924,9 +1227,9 @@ def credits_topup_cmd(
         except CreditsError as exc:
             print_error(str(exc))
             raise typer.Exit(1)
-        if not str(bundle.get("tempo_recipient") or "").strip():
+        if not bundle_primary_recipient(bundle):
             print_error(
-                "This server is not configured for Tempo payments (set MPP_TEMPO_RECIPIENT on the metering service).",
+                "This server is not configured for on-chain payments (set MPP_TEMPO_RECIPIENT or PAYMENT_CHAINS_JSON on the metering service).",
             )
             raise typer.Exit(1)
         try:
@@ -941,13 +1244,13 @@ def credits_topup_cmd(
             print_error(str(exc))
             raise typer.Exit(1)
         print_topup_tempo_chain_confirmed(tx_hash)
-        chain_id = int(bundle["tempo_chain_id"])
-        data, code = credits_topup_tempo(
+        chain_id = plan_chain_id(selected)
+        data, code = credits_topup_onchain(
             base,
             creds["api_key"],
             plan_id=str(selected["id"]),
-            tempo_tx_hash=tx_hash,
-            tempo_chain_id=chain_id,
+            tx_hash=tx_hash,
+            chain_id=chain_id,
         )
         if code == 200 and data:
             print_topup_tempo_register_success(

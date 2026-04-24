@@ -10,6 +10,14 @@ from typing import Any
 import httpx
 
 from bds_agent.credentials import resolve_tempo_env_path
+from bds_agent.plan_fields import (
+    bundle_recipient_for_chain,
+    bundle_rpc_for_chain,
+    plan_chain_id,
+    plan_token_amount,
+    plan_token_contract,
+    plan_token_decimals,
+)
 from bds_agent.paths import config_dir
 
 
@@ -88,15 +96,17 @@ async def execute_tempo_plan_payment(bundle: dict[str, Any], plan: dict[str, Any
 
     load_tempo_env_file()
     account = TempoAccount.from_env()
-    chain_id = int(bundle["tempo_chain_id"])
+    chain_id = plan_chain_id(plan)
     rpc_url = (os.environ.get("TEMPO_RPC_URL") or os.environ.get("MPP_TEMPO_RPC_URL") or "").strip() or str(
-        bundle.get("tempo_rpc_url") or "",
+        bundle_rpc_for_chain(bundle, chain_id),
     )
     if not rpc_url:
-        raise ValueError("Set TEMPO_RPC_URL or use the tempo_rpc_url from GET /credits/plans.")
+        raise ValueError(
+            "Set TEMPO_RPC_URL or use the rpc_url for this chain from GET /credits/plans (chains[] or primary).",
+        )
 
-    tempo_decimals = int(plan.get("tempo_decimals", 6))
-    amount_atomic = human_to_atomic(str(plan["tempo_amount"]), tempo_decimals)
+    t_dec = plan_token_decimals(plan)
+    amount_atomic = human_to_atomic(plan_token_amount(plan), t_dec)
 
     method = tempo(
         account=account,
@@ -112,8 +122,8 @@ async def execute_tempo_plan_payment(bundle: dict[str, Any], plan: dict[str, Any
         intent="charge",
         request={
             "amount": amount_atomic,
-            "currency": str(plan["tempo_currency"]),
-            "recipient": str(bundle["tempo_recipient"]),
+            "currency": plan_token_contract(plan),
+            "recipient": (plan.get("recipient") or "").strip() or bundle_recipient_for_chain(bundle, chain_id),
             "methodDetails": {"chainId": chain_id},
         },
         realm="bds-agenthub",

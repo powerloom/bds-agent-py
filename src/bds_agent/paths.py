@@ -39,6 +39,11 @@ def tempo_env_path_for_profile(profile_name: str) -> Path:
     return profiles_dir() / f"{sanitize_profile_name(profile_name)}.tempo.env"
 
 
+def evm_env_path_for_profile(profile_name: str) -> Path:
+    """Per-profile generic EVM wallet: profiles/<name>.evm.env (for ERC-20 pay flows)."""
+    return profiles_dir() / f"{sanitize_profile_name(profile_name)}.evm.env"
+
+
 def sanitize_profile_name(name: str) -> str:
     s = name.strip()
     if not _PROFILE_NAME_RE.match(s):
