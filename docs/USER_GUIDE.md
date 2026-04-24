@@ -123,6 +123,8 @@ bds-agent credits topup --profile <profile>
 
 The CLI selects a plan, submits the payment, then registers the tx with the metering service. On success, balance increases. Repeat for another purchase.
 
+**Node-only (no Python):** the [powerloom-bds-univ3](https://github.com/powerloom/powerloom-bds-univ3) skill repo includes **`scripts/credits-topup.mjs`**: it calls **`GET /credits/plans`**, matches **`PLAN_ID` / `CHAIN_ID` / `TOKEN_SYMBOL`**, broadcasts ERC-20 or native per the plan, then **`POST /credits/topup`** with your existing **`POWERLOOM_API_KEY`**.
+
 ### 4b. Buy credits: Tempo wallet (only when your plans use the Tempo / pympp path)
 
 Some deployments still document **pathUSD** on **Moderato** (`42431`) and a **Tempo**-specific charge path. If **`credits topup`** on your service expects **Tempo** credentials (see **`GET /credits/plans`** and operator docs), configure the **per-profile** Tempo file:
