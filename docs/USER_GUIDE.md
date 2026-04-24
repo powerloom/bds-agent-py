@@ -1,4 +1,6 @@
-# bds-agent user guide: signup → credits → Tempo top-up
+# bds-agent user guide: signup → credits → on-chain top-up
+
+**Metering is HTTP-first.** The **bds-agent** commands below are a **reference client** for [bds-agenthub-billing-metering](https://github.com/powerloom/bds-agenthub-billing-metering): same `GET /credits/plans` origin, pay-signup (`/signup/pay/quote` → pay → `/signup/pay/claim`), device signup, and `POST /credits/topup`. You can implement the same flow in any language with `fetch` / wallet tooling.
 
 This document lives in the **`bds-agent-py`** repository so it ships with the CLI and stays valid for anyone who clones **this** repo alone. It does **not** reference private workspace-only paths.
 
@@ -15,13 +17,68 @@ Examples in this guide use plain **`bds-agent`** (after **`uv tool install`**). 
 
 ## Prerequisites
 
-1. **Metering service** running and reachable. It must expose **`GET /credits/plans`**, signup routes, and **`POST /credits/topup`** with Tempo/EVM verification configured (`MPP_TEMPO_RECIPIENT`, RPC, chain, seeded plans as needed). See the [bds-agenthub-billing-metering](https://github.com/powerloom/bds-agenthub-billing-metering) README.
+1. **Metering service** running and reachable. It must expose **`GET /credits/plans`**, **device** signup (`/signup/...` + verify), **pay-signup** (`/signup/pay/quote`, `/signup/pay/claim`), and **`POST /credits/topup`**, with EVM (and optional Tempo) verification configured: **`PAYMENT_CHAINS_JSON`**, treasuries, RPC, chain, seeded `credit_plans` as needed. See the [bds-agenthub-billing-metering](https://github.com/powerloom/bds-agenthub-billing-metering) README.
 2. **Signup URL (before `bds-agent signup`):** the CLI uses the **metering service origin** (same host as signup APIs and credits: **`GET /credits/plans`**, **`POST /signup/initiate`**, **`POST /credits/topup`**). **Default (Powerloom production):** **`https://bds-metering.powerloom.io`** — override with **`BDS_AGENT_SIGNUP_URL`** or **`bds-agent signup --base-url …`** if you use a different deploy (e.g. **`http://127.0.0.1:8787`** self‑hosted). **Browser signup and billing UI** (Next static export) live on the **same host** at **`/metering`** — e.g. **`https://bds-metering.powerloom.io/metering`**. The URL used is saved as **`signup_base_url`** in **`profiles/<profile>.json`** for later **`credits`** commands (it is **not** the same as **`bds_base_url`** / snapshotter node; set those separately, e.g. **`bds-agent config init`** after signup).
-3. **On-chain top-up:** a wallet funded on the **same** chain and token as the plan (e.g. pathUSD on Moderato `42431` for the default seed plan).
+3. **On-chain payment:** a wallet funded on the **same** chain and token (or native gas token for `payment_kind: native_value` plans) as the chosen **`GET /credits/plans`** row. See the [metering README](https://github.com/powerloom/bds-agenthub-billing-metering#readme) for **`PAYMENT_CHAINS_JSON`** and plan rows.
+
+## Metering service API (authoritative order)
+
+All paths use one **origin** (default **`https://bds-metering.powerloom.io`**). Override with **`BDS_AGENT_SIGNUP_URL`** or **`bds-agent signup --base-url …`**.
+
+| Step | Method & path | Auth | Purpose |
+|------|---------------|------|---------|
+| Discover SKUs | `GET /credits/plans` | None | `plans[]`: `id`, `chain_id`, `token_symbol`, `payment_kind` (`erc20` or `native_value`), prices; `chains[]` for RPC/recipient. |
+| Pay-signup: quote | `POST /signup/pay/quote` | None | JSON: `agent_name`, `plan_id`, `chain_id`, `token_symbol`, `payer_address` (0x), optional `email`. Returns `signup_nonce`, `recipient`, `amount_atomic`, `token_contract` or native instructions, `rpc_hint`, `expires_at`. |
+| Pay-signup: pay | *(chain)* | — | **ERC-20:** `Transfer` to `recipient` for `amount_atomic`. **Native / CGT:** send `tx.value` per quote. |
+| Pay-signup: claim | `POST /signup/pay/claim` | None | JSON: `signup_nonce`, `tx_hash`. Returns `api_key` (`sk_live_…`). |
+| Device signup | `POST /signup/initiate` → browser `POST /verify` → `GET /signup/status` | Session token / poll | Human-in-the-loop; see below. |
+| Balance / usage | `GET /credits/balance`, `GET /credits/usage` | `Authorization: Bearer <api_key>` | Rate limits and balance. |
+| Top-up | `POST /credits/topup` | Bearer + body with plan + `tx` hash | **After** you already have a key; different from pay-signup. |
+
+**`bds-agent credits plans`** = same JSON as `GET /credits/plans` (CLI pretty-print). **`bds-agent signup-pay`** = wraps quote → sign+broadcast → claim. **`bds-agent credits topup`** = builds/pays a **top-up** (not a new signup). Full request bodies and errors are in the [bds-agenthub-billing-metering](https://github.com/powerloom/bds-agenthub-billing-metering) repo and its README.
 
 ## End-to-end path
 
-### 1. Sign up (device flow)
+### 1. Agent-first: pay-signup (headless, no API key first) — **recommended for automation**
+
+**No browser.** You do **not** need **`signup`** (device flow) or an existing key—only a funded EVM wallet on the plan’s chain.
+
+**HTTP (any client):** follow the table above: **`GET /credits/plans`** → pick **`id`**, **`chain_id`**, **`token_symbol`** → **`POST /signup/pay/quote`** with your wallet as **`payer_address`** → pay on-chain (ERC-20 or native per **`payment_kind`** in the quote) → **`POST /signup/pay/claim`** with **`signup_nonce`** and **`tx_hash`**. Store the returned **`api_key`** in your profile or env.
+
+**`bds-agent` (same steps, interactive):**
+
+1. **Preview plans** (no key):
+
+   ```bash
+   bds-agent credits plans
+   ```
+
+2. **Save a wallet** for the profile (creates `~/.config/bds-agent/profiles/<profile>.evm.env` with `EVM_PRIVATE_KEY`, `EVM_RPC_URL`, `EVM_CHAIN_ID`):
+
+   ```bash
+   bds-agent credits setup-evm
+   # or: --profile <name>  /  BDS_AGENT_PROFILE=...
+   ```
+
+3. **Pay and claim an API key** (quote → pay → claim on the server):
+
+   ```bash
+   bds-agent signup-pay --plan-id <id> --chain-id <eip155> --token-symbol <SYMBOL>
+   ```
+
+   Use **`--plan-id`**, **`--chain-id`**, and **`--token-symbol`** from the plans table. The CLI dispatches **ERC-20** `transfer` or a **native** send depending on the quote’s `payment_kind`. Re-sync the CLI after **`git pull`**: **`uv sync`** (clone) or **`uv tool install --force .`** (global) — [install table](#install-the-cli).
+
+4. **Confirm balance:**
+
+   ```bash
+   bds-agent credits balance
+   ```
+
+**Duplicate / binding:** the quote binds **`payer_address`**; the on-chain `from` must match. If **`email`** is set on the quote, it must not already be taken.
+
+### 2. Sign up (device flow — browser)
+
+**When:** you want email + human verification in a browser instead of pay-first.
 
 **First step:** set the metering base URL, then run **`signup`**.
 
@@ -45,59 +102,44 @@ bds-agent signup
 
 **Duplicate email:** if this email already has an active API key on the server, **`POST /signup/initiate`** returns **409** — use your existing profile or contact support.
 
-### 2. Check free tier
+### 3. Check free tier and preview pricing
 
 ```bash
 bds-agent credits balance
-# or, if you use multiple profiles:
-bds-agent credits balance --profile <profile>
+# or: bds-agent credits balance --profile <profile>
+bds-agent credits plans   # no API key required
 ```
 
-### 3. (Optional) Preview pricing
+### 4. Buy more credits: EVM top-up (you already have an `api_key`)
 
-No API key required for plans (only the metering URL):
+**HTTP:** with **`Authorization: Bearer`**, `POST /credits/topup` with a completed on-chain purchase for a plan (tx hash for verification on the service). Not the same as pay-signup (no new org/key).
+
+**`bds-agent`:** use the **same** EVM wallet as pay-signup / multi-chain top-up:
 
 ```bash
-bds-agent credits plans
+bds-agent credits setup-evm --profile <profile>   # if not already
+bds-agent credits topup --profile <profile>
 ```
 
-Each **top-up** buys **one plan** (e.g. one payment of `token_amount` in `token_contract` → `credits` for that row). Repeat **`credits topup`** for another purchase.
+The CLI selects a plan, submits the payment, then registers the tx with the metering service. On success, balance increases. Repeat for another purchase.
 
-### 4. Configure Tempo wallet (per profile)
+### 4b. Buy credits: Tempo wallet (only when your plans use the Tempo / pympp path)
 
-Tempo config is **per profile**: `~/.config/bds-agent/profiles/<profile>.tempo.env`. It is **only** used to **pay** for credits; **`/mpp/...` data requests** use the **API key** only.
+Some deployments still document **pathUSD** on **Moderato** (`42431`) and a **Tempo**-specific charge path. If **`credits topup`** on your service expects **Tempo** credentials (see **`GET /credits/plans`** and operator docs), configure the **per-profile** Tempo file:
 
 ```bash
 bds-agent credits setup-tempo --profile <profile>
 ```
 
-- Enter **private key** (hex).  
-- **TEMPO_RPC_URL** and **TEMPO_CHAIN_ID** default from **`GET /credits/plans`** when the service is reachable; otherwise Moderato defaults are offered. Press Enter to accept the shown default.
-
-Fund this wallet with the plan’s token on the correct chain before **`topup`**.
-
-### 4b. Pay-signup: generic EVM (optional, no browser)
-
-When the metering service exposes **`/signup/pay/quote`** and **`/signup/pay/claim`**, you can get an API key by paying on-chain: **ERC-20** `transfer` for normal plans, or a **plain native value** send to the treasury for chains where the plan uses the gas token (the CLI picks the right broadcast from the quote). Plan rows need **`token_symbol`** where required. Wallet file is per profile: **`~/.config/bds-agent/profiles/<profile>.evm.env`** (`EVM_PRIVATE_KEY`, optional `EVM_RPC_URL` / `EVM_CHAIN_ID`).
-
-You do **not** need a profile or API key before saving the wallet: run **`bds-agent credits setup-evm`** with no `--profile` and the CLI will ask for a profile name (it only names the file on disk). Or set **`export BDS_AGENT_PROFILE=myname`** once, then run **`setup-evm`**. Then run **`signup-pay`** (same profile is offered by default).
-
-```bash
-bds-agent credits setup-evm                    # or:  --profile <name>  /  BDS_AGENT_PROFILE
-bds-agent signup-pay --plan-id <id> --chain-id <eip155> --token-symbol <SYMBOL>
-```
-
-Pick **`--plan-id`**, **`--chain-id`**, and **`--token-symbol`** from **`bds-agent credits plans`** (same metering origin as device signup). The CLI uses **web3.py 7.x**; after a **`git pull`**, re-sync with **`uv sync`** (clone) or **`uv tool install --force .`** (global tool) like the [install table](#install-the-cli) above.
-
-### 5. Buy credits (Tempo)
+**File:** `~/.config/bds-agent/profiles/<profile>.tempo.env` — used **only** to pay for credits; **`/mpp/...` data requests** use the **API key** only. Enter private key; **TEMPO_RPC_URL** and **TEMPO_CHAIN_ID** default from **`GET /credits/plans`** when reachable. Fund with the plan’s token on the correct chain, then:
 
 ```bash
 bds-agent credits topup --profile <profile>
 ```
 
-The CLI submits an on-chain payment for the selected plan, then registers the tx with the metering service. On success, balance increases.
+**Powerloom production** commonly uses the **EVM** path (**`setup-evm`**) and **`native_value`** or ERC-20 rows from **`GET /credits/plans`**, not Tempo, for top-up—use **§4. Buy more credits: EVM top-up** above unless your operator points you at Tempo.
 
-### 6. Confirm balance
+### 5. Confirm balance (after any path)
 
 ```bash
 bds-agent credits balance --profile <profile>
@@ -323,7 +365,7 @@ This server uses **stdio** only. The MCP client does **not** connect to a URL; i
 
 **Before you wire the client**
 
-1. Complete **signup** so the profile has an **`api_key`**.
+1. Complete **pay-signup** (§1) or **device `signup`** (§2) so the profile has an **`api_key`**.
 2. Point the profile at BDS + catalog: **`bds-agent config init`** (recommended) or set **`BDS_BASE_URL`** and **`BDS_API_ENDPOINTS_CATALOG_JSON`** / **`BDS_SOURCES_JSON`** — same as **`bds-agent run`** (see **API endpoint catalog** and **Profiles and flags** above).
 3. Optional sanity check: **`bds-agent config show`** and confirm **`bds_base_url`** and catalog fields (or env overlay).
 
@@ -393,7 +435,9 @@ bds-agent credits topup --amount 5 --dev-secret <secret>
 
 | Issue | What to check |
 |-------|----------------|
-| No credentials | Run **`signup`**; ensure **`profiles/<profile>.json`** exists and **`active_profile`** or **`--profile`** |
+| No credentials | Run pay-signup (**§1**) or device **`signup`** (§2); ensure **`profiles/<profile>.json`** exists and **`active_profile`** or **`--profile`** |
+| Pay-signup / quote fails | **`plan_id` + `chain_id` + `token_symbol`** must match one **`GET /credits/plans`** row; **`payer_address`** must match the tx `from` |
+| `signup-pay` on-chain reverts | Wallet funded on correct chain; **native** vs **ERC-20** per quote `payment_kind` |
 | Tempo top-up fails | **`MPP_TEMPO_RECIPIENT`** on metering; wallet funded; **`credits plans`** matches chain/token |
 | **`--profile` not recognized** | Use **`bds-agent credits --profile NAME balance`** *or* **`bds-agent credits balance --profile NAME`** (both supported) |
 | **MCP tools empty / server exits** | Catalog not resolved — set **`BDS_API_ENDPOINTS_CATALOG_JSON`** or **`BDS_SOURCES_JSON`**; ensure **`BDS_BASE_URL`** and a valid **API key** profile |
