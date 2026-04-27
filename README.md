@@ -2,6 +2,8 @@
 
 Python package and CLI for building agents on **Powerloom BDS** data markets.
 
+**Orchestrators / agents (framework-neutral):** read **[`SKILL.md`](SKILL.md)** at the repo root for a self-contained index (metering HTTP, full CLI table, env, mistakes, resource links) — same intent as a hosted `curl`’able `skill.md`.
+
 **Status**: `signup` and `credits` are wired to the [bds-agenthub-billing-metering](https://github.com/powerloom/bds-agenthub-billing-metering) HTTP API. `run`, **`bds-agent query`** (NL → catalog route + params), **`bds-agent create`** (NL → `agent.yaml`), and **local MCP** (`bds-agent mcp`, stdio) are implemented. Shared **LLM** layer (`bds-agent llm …`) powers **`query`** and **`create`**. The **`anthropic`** backend implements **only** the Anthropic Messages API; OpenAI- and Ollama-shaped APIs use the **`openai`** and **`ollama`** backends (see **`docs/USER_GUIDE.md`**).
 
 **→ [docs/USER_GUIDE.md](docs/USER_GUIDE.md)** — signup, profiles, balance, Tempo top-up (path to paid credits).

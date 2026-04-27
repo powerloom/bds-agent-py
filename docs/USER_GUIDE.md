@@ -1,5 +1,7 @@
 # bds-agent user guide: signup → credits → on-chain top-up
 
+**Short index (orchestrators, no prose):** see repo-root **[`SKILL.md`](../SKILL.md)** (same GitHub: [`SKILL.md`](https://github.com/powerloom/bds-agent-py/blob/main/SKILL.md)) for command table, metering HTTP, env, and resource links in one file.
+
 **Metering is HTTP-first.** The **bds-agent** commands below are a **reference client** for [bds-agenthub-billing-metering](https://github.com/powerloom/bds-agenthub-billing-metering): same `GET /credits/plans` origin, pay-signup (`/signup/pay/quote` → pay → `/signup/pay/claim`), device signup, and `POST /credits/topup`. You can implement the same flow in any language with `fetch` / wallet tooling.
 
 This document lives in the **`bds-agent-py`** repository so it ships with the CLI and stays valid for anyone who clones **this** repo alone. It does **not** reference private workspace-only paths.
