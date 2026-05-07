@@ -97,6 +97,7 @@ bds-agent signup
 
 - Enter **email** and **agent name** when prompted.
 - Open the **verification URL** in a browser, enter the **user code**, complete captcha/TOS if required.
+- While you verify, the CLI polls **`GET /signup/status`** about **every 5 seconds** (gentle on metering rate limits). **Transient `502` / `503` / `504`** responses are retried with backoff (origin nginx may use **503** throttling by default; **`429`** means “slow down” and is handled the same way).
 - When the CLI resumes, choose a **profile name** (default is derived from the agent name).  
   Files created:
   - `~/.config/bds-agent/profiles/<profile>.json` — API key, org id, metering base URL  

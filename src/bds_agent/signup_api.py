@@ -58,7 +58,7 @@ def poll_until_approved(
     base_url: str,
     session_token: str,
     *,
-    poll_seconds: float = 2.0,
+    poll_seconds: float = 5.0,
     max_wait_seconds: float | None = None,
 ) -> dict[str, Any]:
     base = base_url.rstrip("/")
@@ -77,6 +77,16 @@ def poll_until_approved(
                 retry = int(r.headers.get("Retry-After", "3"))
             except ValueError:
                 retry = 3
+            time.sleep(max(1, min(retry, 60)))
+            continue
+
+        # Nginx limit_req rejects with 503 unless limit_req_status is set. Bad/upstream
+        # health also surfaces as 502/503/504. Retry instead of failing the whole signup.
+        if r.status_code in (502, 503, 504):
+            try:
+                retry = int(r.headers.get("Retry-After", "8"))
+            except ValueError:
+                retry = 8
             time.sleep(max(1, min(retry, 60)))
             continue
 
