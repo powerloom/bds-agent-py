@@ -12,12 +12,19 @@ def setup_anthropic_interactive() -> None:
     defaults = AnthropicSection()
     existing_key = (sec.api_key or "").strip()
 
+    official_base = defaults.base_url  # canonical Anthropic API origin
+    saved_base = (sec.base_url or "").strip()
+
     typer.echo(
         "Anthropic Messages API only (POST …/v1/messages). "
         "Base URL must be the API origin only (no /v1/messages suffix).",
     )
-    base_default = sec.base_url or defaults.base_url
-    base_in = typer.prompt("Base URL", default=base_default)
+    if saved_base and saved_base.rstrip("/") != official_base.rstrip("/"):
+        typer.echo(
+            f"Note: llm.json has base_url={saved_base!r}. "
+            f"Press Enter for the official endpoint ({official_base!r}), or paste another origin."
+        )
+    base_in = typer.prompt("Base URL", default=official_base)
     model_default = sec.model or defaults.model
     model_in = typer.prompt("Model id", default=model_default)
 
@@ -37,7 +44,7 @@ def setup_anthropic_interactive() -> None:
         raise typer.Exit(1)
 
     cfg.anthropic = AnthropicSection(
-        base_url=(base_in or base_default).strip(),
+        base_url=(base_in or official_base).strip(),
         model=(model_in or model_default).strip(),
         api_key=key_in,
         max_tokens=sec.max_tokens,

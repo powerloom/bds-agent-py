@@ -273,7 +273,7 @@ Used by **`bds-agent query`**, **`bds-agent create`**, and **`bds-agent llm ping
 | **`bds-agent llm status`** | Show config path, effective backend, env hints. |
 | **`bds-agent llm list`** | Which backends look configured. |
 | **`bds-agent llm use <backend>`** | Set active backend in **`llm.json`**. |
-| **`bds-agent llm setup anthropic`** | Prompt for base URL, model, API key. |
+| **`bds-agent llm setup anthropic`** | Prompt for base URL, model, API key. The base URL prompt defaults to **`https://api.anthropic.com`** (not any prior custom origin in **`llm.json`**; a note is printed if those differ). |
 | **`bds-agent llm setup openai`** | Prompt for OpenAI-compatible endpoint. |
 | **`bds-agent llm setup ollama`** | Prompt for host and model name. |
 | **`bds-agent llm ping`** | One completion to verify connectivity. |
