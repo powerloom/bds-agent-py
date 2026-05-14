@@ -18,6 +18,8 @@ mcp = ">=1.0"
 eth-abi = "^5.2.0"
 # Pin major 7; web3.py 8+ will need a dedicated migration.
 web3 = ">=7.0.0,<8.0.0"
+# Floor for CVE-2026-34073 (TLS name constraints); pulled transitively via web3/eth-account.
+cryptography = ">=46.0.6,<49"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
