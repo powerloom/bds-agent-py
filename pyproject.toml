@@ -1,33 +1,59 @@
-[tool.poetry]
+[project]
 name = "bds-agent"
 version = "0.1.1"
 description = "CLI for BDS agents: signup, credits, run, MCP (stdio), LLM backends"
-authors = ["Powerloom"]
-readme = "README.md"
-packages = [{ include = "bds_agent", from = "src" }]
+authors = [{name = "Powerloom", email = "hello@powerloom.io"}]
+readme = "PYPI_README.md"
+license = {text = "MIT"}
+requires-python = ">=3.12,<3.14"
+keywords = ["powerloom", "bds", "blockchain", "data-market", "agent", "cli", "web3", "mcp", "uniswap"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "httpx>=0.27.0",
+    "rich>=13.0,<15",
+    "typer==0.15.4",
+    "pympp[tempo]>=0.5.4",
+    "pyyaml>=6.0.3",
+    "pydantic>=2.12.5",
+    "mcp>=1.0",
+    "eth-abi>=5.2.0",
+    # Pin major 7; web3.py 8+ will need a dedicated migration.
+    "web3>=7.0.0,<8.0.0",
+    # Floor for CVE-2026-34073 (TLS name constraints); pulled transitively via web3/eth-account.
+    "cryptography>=46.0.6,<49",
+]
 
-[tool.poetry.dependencies]
-python = "^3.12"
-httpx = "^0.27.0"
-rich = ">=13.0,<15"
-typer = "^0.15.4"
-pympp = { version = "^0.5.4", extras = ["tempo"] }
-pyyaml = "^6.0.3"
-pydantic = "^2.12.5"
-mcp = ">=1.0"
-eth-abi = "^5.2.0"
-# Pin major 7; web3.py 8+ will need a dedicated migration.
-web3 = ">=7.0.0,<8.0.0"
-# Floor for CVE-2026-34073 (TLS name constraints); pulled transitively via web3/eth-account.
-cryptography = ">=46.0.6,<49"
+[project.urls]
+Homepage = "https://powerloom.io"
+Repository = "https://github.com/powerloom/bds-agent-py"
+Documentation = "https://github.com/powerloom/bds-agent-py/blob/main/docs/USER_GUIDE.md"
+"Bug Tracker" = "https://github.com/powerloom/bds-agent-py/issues"
+"Twitter" = "https://x.com/powerloom"
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.0"
-ruff = "^0.9.0"
-
-[tool.poetry.scripts]
+[project.scripts]
 bds-agent = "bds_agent.cli:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9.0",
+]
+
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bds_agent"]
