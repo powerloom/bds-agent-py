@@ -141,30 +141,45 @@ def _sync_guard_config_state(
     state["bds_project"] = project_id
 
 
+def validate_threshold_brackets(threshold_high: float, threshold_low: float) -> None:
+    if threshold_high <= threshold_low:
+        raise RuntimeError(
+            f"--threshold-high ({threshold_high}) must be greater than "
+            f"--threshold-low ({threshold_low}). "
+            "Example WETH: --threshold-high 2012 --threshold-low 2007.",
+        )
+
+
 def evaluate_threshold_cross(
     *,
     price: float,
+    prev_price: float | None,
     position: Position,
     threshold_high: float,
     threshold_low: float,
     reentry_on_breakout: bool = False,
 ) -> str | None:
     """
-    Return action label or None.
+    Return action on **band cross** only (not while dwelling inside a band).
 
-    In ``reserve`` (USDC), default is **dip re-entry only** when price <= low.
-    After take-profit, price still above high does **not** re-buy unless
-    ``reentry_on_breakout`` is enabled.
+    Requires ``prev_price`` from the prior poll so we do not re-fire every tick.
+
+    - **token:** cross up through high → take-profit; cross down through low → stop-loss
+    - **reserve:** cross down through low → dip re-entry (default)
+    - **reserve:** cross up through high → breakout re-entry (only if ``reentry_on_breakout``)
     """
+    if prev_price is None:
+        return None
+
     if position == "token":
-        if price >= threshold_high:
+        if prev_price < threshold_high <= price:
             return "take_profit_sell"
-        if price <= threshold_low:
+        if prev_price > threshold_low >= price:
             return "stop_loss_sell"
         return None
-    if price <= threshold_low:
+    if prev_price > threshold_low >= price:
         return "reentry_buy_dip"
-    if reentry_on_breakout and price >= threshold_high:
+    if reentry_on_breakout and prev_price < threshold_high <= price:
         return "reentry_buy_breakout"
     return None
 
@@ -312,6 +327,7 @@ def run_initial_entry_if_needed(
 
 
 def run_guard_sync(cfg: GuardConfig) -> None:
+    validate_threshold_brackets(cfg.threshold_high, cfg.threshold_low)
     state = load_guard_state(cfg.profile)
     pool = _resolve_watched_pool(cfg, state)
     base_token = resolve_guard_base_token(cfg, pool)
@@ -374,8 +390,11 @@ def run_guard_sync(cfg: GuardConfig) -> None:
             )
         else:
             epoch_s = str(epoch) if epoch is not None else "latest-submitted"
+            raw_prev = state.get("last_price_usd")
+            prev_price = float(raw_prev) if isinstance(raw_prev, (int, float)) else None
             action = evaluate_threshold_cross(
                 price=price,
+                prev_price=prev_price,
                 position=position,
                 threshold_high=cfg.threshold_high,
                 threshold_low=cfg.threshold_low,

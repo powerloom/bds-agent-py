@@ -22,7 +22,9 @@ bds-agent guard enter --profile bds-tgtest2 \
 
 Default state assumes **`position=token`** (you are “in” the base leg). Without `--enter`, you must already hold the base token from a prior buy.
 
-**After take-profit** (`position=reserve`): default is **hold USDC** until price ≤ `--threshold-low` (dip re-entry). You will **not** immediately buy back while price is still above `--threshold-high`. Use `--reentry-on-breakout` only if you explicitly want the old breakout re-entry behavior.
+**After take-profit** (`position=reserve`): default is **hold USDC** until price **crosses down** through `--threshold-low` (dip re-entry). You will **not** immediately buy back while price is still above `--threshold-high`. Use `--reentry-on-breakout` only if you explicitly want breakout re-entry.
+
+**Edge-triggered (not level):** actions fire only when price **crosses** a band between polls (`prev → current`), not every tick while price sits inside a band. That prevents sell→buy→sell churn. First tick after start never trades (no `prev_price` yet). **`--threshold-high` must be > `--threshold-low`** (e.g. high=2012, low=2007 for WETH).
 
 ## Pool + token (price feed)
 
