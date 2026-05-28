@@ -5,6 +5,7 @@ Run an agent: load ``agent.yaml``, SSE stream, rules → sinks.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -166,16 +167,17 @@ async def run_agent(
             ),
         )
 
+    stream_gen = stream(
+        base,
+        endpoint,
+        api_key,
+        reconnect_delay=lc.reconnect_delay,
+        max_reconnects=lc.max_reconnects,
+        reconnect=lc.reconnect,
+    )
     try:
         async with _optional_verify_http(cfg, rpc_url) as verify_http:
-            async for chunk in stream(
-                base,
-                endpoint,
-                api_key,
-                reconnect_delay=lc.reconnect_delay,
-                max_reconnects=lc.max_reconnects,
-                reconnect=lc.reconnect,
-            ):
+            async for chunk in stream_gen:
                 if chunk.credit_balance is not None and chunk.credit_balance <= 0:
                     out.print(
                         "[yellow]credit balance 0[/] — check metering / top-up; stream may stop soon",
@@ -215,11 +217,11 @@ async def run_agent(
     except BdsClientError as e:
         out.print(f"[red]stream failed[/] {e}")
         raise SystemExit(1) from e
-    except asyncio.CancelledError:
-        raise
-    except KeyboardInterrupt:
+    except (asyncio.CancelledError, KeyboardInterrupt):
         out.print("[dim]stopped[/]")
-        raise
+    finally:
+        with contextlib.suppress(BaseException):
+            await stream_gen.aclose()
 
 
 def run_agent_sync(
@@ -227,4 +229,7 @@ def run_agent_sync(
     *,
     profile_override: str | None = None,
 ) -> None:
-    asyncio.run(run_agent(config_path, profile_override=profile_override))
+    try:
+        asyncio.run(run_agent(config_path, profile_override=profile_override))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        return

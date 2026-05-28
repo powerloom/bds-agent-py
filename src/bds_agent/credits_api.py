@@ -99,3 +99,92 @@ def credits_topup_onchain(
     if isinstance(data, dict):
         return data, r.status_code
     return None, r.status_code
+
+
+def credits_usage(
+    base_url: str,
+    api_key: str,
+    *,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """GET /credits/usage — recent ledger rows."""
+    base = base_url.rstrip("/")
+    lim = max(1, min(500, int(limit)))
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(
+            f"{base}/credits/usage",
+            params={"limit": lim},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    if r.status_code == 401:
+        raise CreditsError("Unauthorized — check your API key in the credentials file.")
+    if r.status_code != 200:
+        try:
+            detail = r.json()
+        except Exception:
+            detail = r.text
+        raise CreditsError(f"usage failed ({r.status_code}): {detail}")
+    data = r.json()
+    if not isinstance(data, dict):
+        raise CreditsError("Invalid JSON from credits/usage")
+    return data
+
+
+def credits_usage_summary(
+    base_url: str,
+    api_key: str,
+    *,
+    days: int = 7,
+) -> dict[str, Any]:
+    """GET /credits/usage/summary — daily totals and per-endpoint rollup."""
+    base = base_url.rstrip("/")
+    d = max(1, min(90, int(days)))
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(
+            f"{base}/credits/usage/summary",
+            params={"days": d},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    if r.status_code == 401:
+        raise CreditsError("Unauthorized — check your API key in the credentials file.")
+    if r.status_code != 200:
+        try:
+            detail = r.json()
+        except Exception:
+            detail = r.text
+        raise CreditsError(f"usage summary failed ({r.status_code}): {detail}")
+    data = r.json()
+    if not isinstance(data, dict):
+        raise CreditsError("Invalid JSON from credits/usage/summary")
+    return data
+
+
+def credits_usage_by_endpoint(
+    base_url: str,
+    api_key: str,
+    *,
+    days: int = 30,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """GET /credits/usage/by-endpoint — endpoint rollup."""
+    base = base_url.rstrip("/")
+    d = max(1, min(90, int(days)))
+    lim = max(1, min(200, int(limit)))
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(
+            f"{base}/credits/usage/by-endpoint",
+            params={"days": d, "limit": lim},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    if r.status_code == 401:
+        raise CreditsError("Unauthorized — check your API key in the credentials file.")
+    if r.status_code != 200:
+        try:
+            detail = r.json()
+        except Exception:
+            detail = r.text
+        raise CreditsError(f"usage by-endpoint failed ({r.status_code}): {detail}")
+    data = r.json()
+    if not isinstance(data, dict):
+        raise CreditsError("Invalid JSON from credits/usage/by-endpoint")
+    return data

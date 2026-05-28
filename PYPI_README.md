@@ -11,6 +11,9 @@ Python package and CLI for building agents on **[Powerloom BDS](https://powerloo
 - **MCP server** — stdio-based MCP exposing BDS catalog as tools for Claude, Cursor, LangGraph, CrewAI, etc.
 - **LLM backends** — Anthropic, OpenAI-compatible, Ollama (local)
 - **On-chain verification** — optional CID verification against `ProtocolState.maxSnapshotsCid`
+- **Pulse trader** — BDS stream → Pulse signals → Uniswap V3 swaps (`bds-agent trade`; separate `.trade.env` wallet)
+- **Threshold Guard** — bracket take-profit / stop-loss on BDS USD prices (`bds-agent guard`; `--enter` swaps USDC → base; same `.trade.env`)
+- **USD prices** — `bds-agent prices at` / `prices token` against `/mpp/token/price/` and `/mpp/tokenPrices/all/`
 
 ## Installation
 
@@ -45,6 +48,13 @@ bds-agent create "alert me on Slack when any ETH/USDC swap exceeds $50k"
 
 # Start the MCP server (stdio) for AI framework integration
 bds-agent mcp
+
+# Threshold Guard: enter with USDC, then poll brackets (ETH mainnet example)
+bds-agent trade setup-evm --profile myguard
+bds-agent guard run --profile myguard \
+  --pool 0xE0554a476A092703abdB3Ef35c80e0D76d32939F \
+  --token 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 \
+  --enter --size 25 --threshold-high 2010 --threshold-low 2007 --poll 15
 ```
 
 ## Available Commands
@@ -55,6 +65,12 @@ bds-agent mcp
 | `bds-agent signup-pay` | Wallet-funded API key (no browser) |
 | `bds-agent credits balance` | Credit balance and rate limits |
 | `bds-agent credits topup` | Top up credits via billing link or on-chain |
+| `bds-agent credits setup-evm` | Billing wallet → `profiles/<n>.evm.env` |
+| `bds-agent trade setup-evm` | Swap wallet → `profiles/<n>.trade.env` |
+| `bds-agent trade run` | Pulse trader (see `docs/TRADE.md`) |
+| `bds-agent prices at` / `prices token` | USD price feed (pool-scoped or all pools) |
+| `bds-agent guard run` | Threshold Guard bracket trading (see `docs/GUARD.md`) |
+| `bds-agent guard enter` / `guard status` | USDC → base entry or guard state |
 | `bds-agent run <agent.yaml>` | SSE stream → rules → sinks |
 | `bds-agent query "…"` | NL → endpoint + params (LLM) |
 | `bds-agent create "…"` | NL → `agent.yaml` (LLM + validation) |
@@ -69,6 +85,9 @@ bds-agent mcp
 ## Documentation
 
 - [User Guide](https://github.com/powerloom/bds-agent-py/blob/main/docs/USER_GUIDE.md)
+- [Pulse trader (`trade`)](https://github.com/powerloom/bds-agent-py/blob/main/docs/TRADE.md)
+- [Threshold Guard (`guard`)](https://github.com/powerloom/bds-agent-py/blob/main/docs/GUARD.md)
+- [USD prices (`prices`)](https://github.com/powerloom/bds-agent-py/blob/main/docs/PRICES.md)
 - [Agent YAML Schema](https://github.com/powerloom/bds-agent-py/blob/main/docs/AGENT_YAML.md)
 - [Rules Reference](https://github.com/powerloom/bds-agent-py/blob/main/docs/RULES.md)
 - [Sinks Reference](https://github.com/powerloom/bds-agent-py/blob/main/docs/SINKS.md)

@@ -34,7 +34,7 @@ All paths use one **origin** (default **`https://bds-metering.powerloom.io`**). 
 | Pay-signup: pay | *(chain)* | — | **ERC-20:** `Transfer` to `recipient` for `amount_atomic`. **Native / CGT:** send `tx.value` per quote. |
 | Pay-signup: claim | `POST /signup/pay/claim` | None | JSON: `signup_nonce`, `tx_hash`. Returns `api_key` (`sk_live_…`). |
 | Device signup | `POST /signup/initiate` → browser `POST /verify` → `GET /signup/status` | Session token / poll | Human-in-the-loop; see below. |
-| Balance / usage | `GET /credits/balance`, `GET /credits/usage` | `Authorization: Bearer <api_key>` | Rate limits and balance. |
+| Balance / usage | `GET /credits/balance`, `GET /credits/usage`, `GET /credits/usage/summary`, `GET /credits/usage/by-endpoint` | `Authorization: Bearer <api_key>` | Balance, rate limits, ledger, per-endpoint rollup. Browser: **`/metering/account`**. CLI: **`bds-agent credits usage`**, **`bds-agent credits usage summary`**, **`bds-agent credits usage by-endpoint`**. |
 | Top-up | `POST /credits/topup` | Bearer + body with plan + `tx` hash | **After** you already have a key; different from pay-signup. |
 
 **`bds-agent credits plans`** = same JSON as `GET /credits/plans` (CLI pretty-print). **`bds-agent signup-pay`** = wraps quote → sign+broadcast → claim. **`bds-agent credits topup`** = builds/pays a **top-up** (not a new signup). Full request bodies and errors are in the [bds-agenthub-billing-metering](https://github.com/powerloom/bds-agenthub-billing-metering) repo and its README.
@@ -111,6 +111,9 @@ bds-agent signup
 bds-agent credits balance
 # or: bds-agent credits balance --profile <profile>
 bds-agent credits plans   # no API key required
+bds-agent credits usage   # recent ledger (route, method, path, client source)
+bds-agent credits usage summary --days 30
+bds-agent credits usage by-endpoint --days 30 --limit 50
 ```
 
 ### 4. Buy more credits: EVM top-up (you already have an `api_key`)
@@ -342,11 +345,62 @@ bds-agent create "Slack webhook alerts for volume spikes on all pools" --backend
 
 Typical NL-generated DEX agents use **`bds_stream`** + **`/mpp/stream/allTrades`** and **`stdout`** or webhooks. **Rule parameters** (`min_usd.threshold`, etc.) accept plain numbers or strings like **`50k`**; see **`docs/RULES.md`**.
 
+### USD Price Feed (`bds-agent prices`)
+
+Reference client for premium **`GET /mpp/tokenPrices/`**. See **`docs/PRICES.md`**.
+
+```bash
+bds-agent prices at 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 \
+  --pool 0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640
+bds-agent prices token 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 --json
+bds-agent credits usage by-endpoint
+```
+
+### Threshold Guard (`bds-agent guard`)
+
+Bracket take-profit / stop-loss / re-entry on BDS USD prices (same wallet files as **`trade`**).
+
+```bash
+bds-agent guard run --profile pulse --pool 0x... --token 0x... \
+  --threshold-high 0.00009 --threshold-low 0.00006 --poll 15 --dry-run
+bds-agent guard status --profile pulse   # shows pool_address, base_token, thresholds
+```
+
+Full guard CLI reference: **`docs/GUARD.md`**.
+
+```bash
+# After first run, pool is read from .guard.json if --pool omitted
+bds-agent guard run --profile pulse --threshold-high 2010 --threshold-low 2001
+```
+
+### Pulse trader (`bds-agent trade`)
+
+Self-contained **Pulse** recipe: BDS stream → confluence (price + volume + flow) → Uniswap V3 swap on ETH mainnet. **Production Pulse** uses the **USD Price Feed** for the price gate (`--price-source usd`, default). With **`--multi-pool`**, watches top USDC-quoted pools from `dailyActivePools` and enters the strongest LONG (including alt pairs, not only WETH).
+
+Requires profile API key plus **`trade setup-evm`** ( **`profiles/<name>.trade.env`** — separate from billing **`profiles/<name>.evm.env`** ).
+
+```bash
+bds-agent trade setup-evm --profile pulse   # trading wallet only
+bds-agent trade run --profile pulse --dry-run --multi-pool --verbose
+bds-agent trade run --profile pulse --multi-pool --price-source usd --size 25
+bds-agent trade status|history|pnl|exit --profile pulse
+```
+
+**Billing:** Pulse consumes **metered API credits** — **`/mpp/stream/allTrades`** (per connection) plus premium **`GET /mpp/tokenPrices/...`** when `--price-source usd`. There is **no** separate fee for running the trader CLI. Monitor spend:
+
+```bash
+bds-agent credits usage by-endpoint --days 7
+```
+
+Dry-run positions are labeled **`LONG (dry-run — not on-chain)`** in status; starting **live** without `--dry-run` clears paper position and paper cooldown. All exit modes are CLI flags; defaults: `--price-move 0.15`, `--exit-take-profit-pct 1.0`, `--active-pool-limit 40`. Full reference: **`docs/TRADE.md`**.
+
 ### Metering and SSE (`/mpp/stream/...`)
 
 The stream is **not** free: it is **`/mpp/...`**, which is **metered** on deployments that use **Bearer API keys** and **signup** billing (**`MPP_BILLING_MODE=signup_api`** on the snapshotter). The core API middleware **deducts once** when the **SSE request is accepted** (**per connection**), **not** per `data:` line in the SSE body.
 
 **Credit policy (product):** **1 credit** per stream open is priced at parity with **7200** successful **`GET /mpp/snapshot/...`** calls (**1/7200 credit** each); the stream session is intended to deliver **up to 7200 epochs** of events for that credit. **Implementation:** the metering service backing your deployment debits from the API key’s balance when the snapshotter accepts the request (one debit per stream **connection**, not per SSE event). How **`path`** maps to debit size is deployment-specific. **Resuming** a partially delivered entitlement (e.g. after disconnect) without paying again is **not** implemented in this CLI—it depends on server and metering behavior. The **`bds-agent`** client surfaces **`X-BDS-Credit-Balance`** when the server returns it.
+
+**Pulse + USD Price Feed:** When **`bds-agent trade run`** uses **`--price-source usd`** (default), the price gate calls **`GET /mpp/tokenPrices/all/{token}/{block}`** — a **premium** metered route (debited per request; see your plan and **`bds-agent credits usage by-endpoint`**). Volume and flow still come from the **`allTrades`** stream. You pay for **stream + tokenPrices** usage; there is no separate “agent action” SKU.
 
 **If you need cost to scale linearly with every epoch** and no bundled “session,” use **`GET /mpp/snapshot/allTrades/{epoch}`** **per epoch** instead of the long-lived stream. On snapshotter deployments that bill via **Tempo** / pympp (**`MPP_BILLING_MODE=tempo`**), snapshot routes use **`MPP_CHARGE_AMOUNT`** and **`/mpp/stream/...`** uses **`MPP_STREAM_AMOUNT`**—configure with your operator.
 

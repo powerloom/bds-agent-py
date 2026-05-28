@@ -1,4 +1,8 @@
-"""Per-profile Ethereum key and RPC for pay-to-signup and on-chain credit purchase (Tempo top-up uses `.tempo.env` instead)."""
+"""Per-profile Ethereum key and RPC for pay-to-signup and on-chain credit purchase.
+
+Trading swaps use ``profiles/<name>.trade.env`` (``bds-agent trade setup-evm``).
+Tempo top-up uses ``profiles/<name>.tempo.env`` instead of this file.
+"""
 
 from __future__ import annotations
 
