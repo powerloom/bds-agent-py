@@ -9,7 +9,6 @@ from bds_agent.active_markets import WatchedPool
 from bds_agent.trader_state import (
     default_trader_state,
     is_reentry_blocked,
-    set_reentry_cooldown,
     utc_now_iso,
 )
 

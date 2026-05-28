@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from bds_agent.evm_swap import _amount_out_min_attempts, _slippage_attempts
+from bds_agent.evm_swap import (
+    _amount_out_min_attempts,
+    _is_swap_retryable,
+    _slippage_attempts,
+)
 from bds_agent.trade import _position_sell_tokens
 
 
@@ -17,6 +21,14 @@ def test_amount_out_min_attempts_relax_to_zero() -> None:
     attempts = _amount_out_min_attempts(10_000_000)
     assert attempts[0] == 10_000_000
     assert attempts[-1] == 0
+
+
+def test_is_swap_retryable_stf_only() -> None:
+    from web3.exceptions import ContractLogicError
+
+    exc = ContractLogicError("execution reverted: STF")
+    assert _is_swap_retryable(exc) is True
+    assert _is_swap_retryable(RuntimeError("execution reverted: transfer amount exceeds balance")) is False
 
 
 def test_slippage_attempts_widen() -> None:

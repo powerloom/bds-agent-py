@@ -11,7 +11,8 @@ import httpx
 import typer
 from eth_account import Account
 from rich import print as rprint
-
+from bds_agent.trade import TraderConfig
+from bds_agent.pulse import PulseThresholds
 from bds_agent import __version__
 from bds_agent.credentials import (
     OPTIONAL_PROFILE_BDS_KEYS,
@@ -1553,14 +1554,14 @@ def llm_ping_cmd(
 
 
 def _trade_thresholds(
+    
     price_move: float,
     volume_burst: float,
     flow_imbalance: float,
     window_minutes: float,
     signal_cooldown_minutes: float,
     price_source: str = "trades",
-) -> "PulseThresholds":
-    from bds_agent.pulse import PulseThresholds
+) -> PulseThresholds:
 
     return PulseThresholds(
         price_move_pct=price_move,
@@ -1602,7 +1603,7 @@ def _trade_config(
     active_interval_seconds: int = 300,
     price_source: str = "trades",
     block_long_on_down_move: bool = True,
-) -> "TraderConfig":
+) -> TraderConfig:
     from bds_agent.exit_strategies import ExitConfig
     from bds_agent.trade import TraderConfig
 
@@ -2155,7 +2156,10 @@ def guard_enter_cmd(
     state = load_guard_state(profile)
     pool_wp = _resolve_watched_pool(cfg, state)
     base_token = resolve_guard_base_token(cfg, pool_wp)
-    private_key, rpc_url, _chain_id = resolve_trade_wallet()
+    private_key, rpc_url, chain_id = resolve_trade_wallet()
+    from bds_agent.evm_swap import enrich_watched_pool_fee
+
+    pool_wp = enrich_watched_pool_fee(rpc_url, pool_wp)
     project_id = base_snapshot_project_id(pool_wp.address, _bds_namespace(cfg))
     _sync_guard_config_state(
         state,
@@ -2178,6 +2182,7 @@ def guard_enter_cmd(
             price=price,
             rpc_url=rpc_url,
             private_key=private_key,
+            chain_id=chain_id,
         )
     except RuntimeError as exc:
         print_error(str(exc))

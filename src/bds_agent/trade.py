@@ -7,7 +7,6 @@ import contextlib
 import os
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -32,12 +31,11 @@ from bds_agent.exit_strategies import ExitCheck, ExitConfig, check_exit, evaluat
 from bds_agent.secrets import redact_secrets
 from bds_agent.profile_env import resolve_bds_base_url
 from bds_agent.active_markets import WatchedPool, fetch_daily_active_pools
-from bds_agent.multi_pool import MultiPoolTracker, PoolEpochResult
+from bds_agent.multi_pool import MultiPoolTracker
 from bds_agent.positions import (
     add_position,
     aggregate_position_label,
     can_enter_pool,
-    entry_fields_from_pool,
     exit_state_view,
     find_position,
     has_open_pool,
@@ -56,7 +54,6 @@ from bds_agent.trader_state import (
     calculate_pnl_pct,
     calculate_pnl_usd,
     daily_realized_pnl_usd,
-    default_trader_state,
     is_dry_run_position,
     load_trader_state,
     load_trades,

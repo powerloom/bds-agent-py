@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from bds_agent.credentials import load_credentials, resolve_profile_name
+from bds_agent.credentials import load_credentials
 from bds_agent.defaults import DEFAULT_BDS_BASE_URL
 from bds_agent.profile_env import resolve_bds_base_url
 from bds_agent.usd_prices import fetch_all_token_prices, fetch_token_usd_in_pool

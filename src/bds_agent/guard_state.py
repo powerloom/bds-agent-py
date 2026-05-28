@@ -28,6 +28,9 @@ def default_guard_state() -> dict[str, Any]:
         "last_block": None,
         "bds_project": None,
         "last_action": None,
+        "pending_action": None,
+        "pending_fail_count": 0,
+        "last_execute_error": None,
         "updated_at": None,
     }
 

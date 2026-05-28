@@ -73,6 +73,12 @@ guard pool=USDC/WETH pool_addr=0xE0554a476A092703abdB3Ef35c80e0D76d32939F base_t
 - `position` — `token` | `reserve`
 - `last_price_usd`, `last_epoch`, `bds_project`, `last_action`
 
+## STF / slippage failures
+
+Uniswap **STF** (`amountOutMinimum` too tight vs pool) is retried with wider slippage and relaxed `amountOutMinimum` → 0. Pool **fee tier** and token order come from on-chain `pool.fee()` / `token0` / `token1` (not BDS metadata alone). Insufficient USDC or stuck pending txs surface as explicit errors. If swaps still fail, guard **does not exit** — it sets `pending_action` and retries with **backoff** (not every 5s).
+
+Startup logs `pool_fee=` from on-chain `pool.fee()`. USDC/WETH `0xE055…` is the **0.01%** tier (**100**), not the main 0.05% pool (`0x88e6…`, fee **500**). Also check `wallet_usdc=` before `--enter`.
+
 ## Stuck / pending transactions
 
 `--enter` sends **approve** then **swap** (two sequential txs). If you **Ctrl+C** mid-flight, a pending tx can block the next run with `replacement transaction underpriced`.

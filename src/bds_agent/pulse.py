@@ -152,8 +152,6 @@ class PulseBuffer:
                 now_s,
             )
         elif short.first_price and short.last_price and short.first_price > 0:
-            head_price = short.first_price
-            tail_price = short.last_price
             price_pct = ((short.last_price - short.first_price) / short.first_price) * 100.0
         burst = short.vol_usd / baseline_short if baseline_short > 0 else 0.0
         imbalance = (abs(short.net_usd) / short.vol_usd) if short.vol_usd > 0 else 0.0

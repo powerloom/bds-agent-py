@@ -192,6 +192,7 @@ def _execute_action(
     *,
     rpc_url: str,
     private_key: str,
+    chain_id: int,
 ) -> dict[str, Any]:
     if cfg.dry_run:
         return {"dry_run": True, "action": action, "price_usd": price}
@@ -214,6 +215,7 @@ def _execute_action(
             balance,
             slippage=cfg.slippage,
             token_price_usd=price,
+            chain_id=chain_id,
         )
         return {"action": action, "tx_hash": tx, "new_position": "reserve"}
     if action in ("reentry_buy_dip", "reentry_buy_breakout"):
@@ -224,6 +226,7 @@ def _execute_action(
             size_usd=cfg.size_usd,
             slippage=cfg.slippage,
             token_price_usd=price,
+            chain_id=chain_id,
         )
         return {"action": action, "tx_hash": tx, "new_position": "token"}
     raise RuntimeError(f"Unknown action: {action}")
@@ -244,6 +247,7 @@ def execute_initial_entry(
     base_balance_human: float,
     rpc_url: str,
     private_key: str,
+    chain_id: int,
 ) -> dict[str, Any]:
     """Buy base token with USDC (enter the pool) using ``cfg.size_usd``."""
     if not should_initial_entry(cfg, base_balance_human):
@@ -266,6 +270,7 @@ def execute_initial_entry(
         size_usd=cfg.size_usd,
         slippage=cfg.slippage,
         token_price_usd=price,
+        chain_id=chain_id,
     )
     return {
         "action": "initial_entry_buy",
@@ -284,6 +289,7 @@ def run_initial_entry_if_needed(
     price: float | None,
     rpc_url: str,
     private_key: str,
+    chain_id: int,
 ) -> tuple[Position, dict[str, Any] | None]:
     """
     On ``--enter``, swap USDC → base when wallet has negligible base balance.
@@ -291,6 +297,8 @@ def run_initial_entry_if_needed(
     Returns updated position (``token`` after a buy) and optional result dict.
     """
     from eth_account import Account
+    from bds_agent.evm_tx import wait_for_no_pending_txs
+    from bds_agent.evm_swap import _web3
 
     if not cfg.enter:
         return position, None
@@ -300,11 +308,19 @@ def run_initial_entry_if_needed(
             "price unavailable on startup",
         )
     owner = Account.from_key(private_key.strip()).address
+    w3 = _web3(rpc_url)
+    wait_for_no_pending_txs(w3, owner, timeout=120.0)
     base_bal = get_erc20_balance_human(
         rpc_url,
         pool.base_token,
         owner,
         pool.base_decimals,
+    )
+    usdc_bal = get_erc20_balance_human(
+        rpc_url,
+        pool.usdc_token,
+        owner,
+        pool.quote_decimals,
     )
     if not should_initial_entry(cfg, base_bal):
         return position, {
@@ -312,6 +328,10 @@ def run_initial_entry_if_needed(
             "reason": f"already hold {base_bal:g} base",
             "base_balance": base_bal,
         }
+    if usdc_bal < cfg.size_usd * 0.99:
+        raise RuntimeError(
+            f"Insufficient USDC for --enter: need ~${cfg.size_usd:g}, wallet has ${usdc_bal:g} USDC",
+        )
     result = execute_initial_entry(
         cfg,
         pool,
@@ -319,6 +339,7 @@ def run_initial_entry_if_needed(
         base_balance_human=base_bal,
         rpc_url=rpc_url,
         private_key=private_key,
+        chain_id=chain_id,
     )
     new_pos = result.get("new_position", "token")
     if new_pos in ("token", "reserve"):
@@ -331,7 +352,10 @@ def run_guard_sync(cfg: GuardConfig) -> None:
     state = load_guard_state(cfg.profile)
     pool = _resolve_watched_pool(cfg, state)
     base_token = resolve_guard_base_token(cfg, pool)
-    private_key, rpc_url, _chain_id = resolve_trade_wallet()
+    private_key, rpc_url, chain_id = resolve_trade_wallet()
+    from bds_agent.evm_swap import enrich_watched_pool_fee, get_token_balances_human
+
+    pool = enrich_watched_pool_fee(rpc_url, pool)
     position: Position = state.get("position") if state.get("position") in ("token", "reserve") else "token"
     namespace = _bds_namespace(cfg)
     project_id = base_snapshot_project_id(pool.address, namespace)
@@ -345,34 +369,59 @@ def run_guard_sync(cfg: GuardConfig) -> None:
     save_guard_state(state, cfg.profile)
 
     pool_from_state = not (cfg.pool and str(cfg.pool).strip())
+    from eth_account import Account
+
+    owner = Account.from_key(private_key.strip()).address
+    usdc_bal, weth_bal = get_token_balances_human(rpc_url, owner)
     print(
         f"guard pool={pool.label} pool_addr={pool.address} "
         f"base_token={base_token} position={position} "
         f"high={cfg.threshold_high} low={cfg.threshold_low} "
         f"poll={cfg.poll_seconds}s dry_run={cfg.dry_run} "
-        f"enter={cfg.enter} size_usd={cfg.size_usd} "
+        f"enter={cfg.enter} size_usd={cfg.size_usd} pool_fee={pool.fee} "
+        f"chain_id={chain_id} wallet_usdc=${usdc_bal:g} wallet_weth={weth_bal:g} "
         f"bds_project={project_id}"
         + (" pool_source=state" if pool_from_state else ""),
         flush=True,
     )
+    if cfg.enter and usdc_bal < cfg.size_usd * 0.99:
+        print(
+            f"[guard] warning: USDC balance ${usdc_bal:g} < --size ${cfg.size_usd:g}; "
+            "entry swap will fail until you top up USDC",
+            flush=True,
+        )
 
     startup_price, startup_epoch, _ = _bds_price_context(cfg, pool, base_token=base_token)
     if cfg.enter:
-        position, entry_result = run_initial_entry_if_needed(
-            cfg,
-            pool,
-            position=position,
-            price=startup_price,
-            rpc_url=rpc_url,
-            private_key=private_key,
-        )
-        state["position"] = position
-        state["last_action"] = entry_result
-        state["last_price_usd"] = startup_price
-        state["last_epoch"] = startup_epoch
-        state["updated_at"] = utc_now_iso()
-        save_guard_state(state, cfg.profile)
-        print(f"[guard] enter {entry_result}", flush=True)
+        try:
+            position, entry_result = run_initial_entry_if_needed(
+                cfg,
+                pool,
+                position=position,
+                price=startup_price,
+                rpc_url=rpc_url,
+                private_key=private_key,
+                chain_id=chain_id,
+            )
+        except Exception as exc:
+            err_s = str(exc).split("\n", maxsplit=1)[0]
+            print(
+                f"[guard] enter failed: {err_s} — will retry as pending_action",
+                flush=True,
+            )
+            state["pending_action"] = "initial_entry_buy"
+            state["last_execute_error"] = err_s
+            save_guard_state(state, cfg.profile)
+        else:
+            state["position"] = position
+            state["last_action"] = entry_result
+            state["pending_action"] = None
+            state["last_execute_error"] = None
+            state["last_price_usd"] = startup_price
+            state["last_epoch"] = startup_epoch
+            state["updated_at"] = utc_now_iso()
+            save_guard_state(state, cfg.profile)
+            print(f"[guard] enter {entry_result}", flush=True)
 
     ticks = 0
     while True:
@@ -392,14 +441,18 @@ def run_guard_sync(cfg: GuardConfig) -> None:
             epoch_s = str(epoch) if epoch is not None else "latest-submitted"
             raw_prev = state.get("last_price_usd")
             prev_price = float(raw_prev) if isinstance(raw_prev, (int, float)) else None
-            action = evaluate_threshold_cross(
-                price=price,
-                prev_price=prev_price,
-                position=position,
-                threshold_high=cfg.threshold_high,
-                threshold_low=cfg.threshold_low,
-                reentry_on_breakout=cfg.reentry_on_breakout,
-            )
+            pending = state.get("pending_action")
+            if isinstance(pending, str) and pending.strip():
+                action = pending.strip()
+            else:
+                action = evaluate_threshold_cross(
+                    price=price,
+                    prev_price=prev_price,
+                    position=position,
+                    threshold_high=cfg.threshold_high,
+                    threshold_low=cfg.threshold_low,
+                    reentry_on_breakout=cfg.reentry_on_breakout,
+                )
             print(
                 f"[guard] tick={ticks} pool={pool_tag} base_token={base_token} "
                 f"bds_epoch={epoch_s} price=${price:.8g} "
@@ -407,27 +460,66 @@ def run_guard_sync(cfg: GuardConfig) -> None:
                 flush=True,
             )
             if action:
+                pending_retry = (
+                    isinstance(state.get("pending_action"), str)
+                    and state.get("pending_action") == action
+                )
+                if pending_retry:
+                    fails = int(state.get("pending_fail_count") or 0)
+                    wait_s = min(90.0, cfg.poll_seconds * (2 ** min(fails, 5)))
+                    print(
+                        f"[guard] retrying pending {action} "
+                        f"(attempt {fails + 1}, backoff {wait_s:.0f}s)...",
+                        flush=True,
+                    )
+                    time.sleep(wait_s)
                 print(
                     f"[guard] executing {action} (on-chain; may take 1–5 min: "
                     f"pending mempool, approve, swap, confirmation)...",
                     flush=True,
                 )
                 try:
-                    result = _execute_action(
-                        cfg,
-                        pool,
-                        action,
-                        price,
-                        rpc_url=rpc_url,
-                        private_key=private_key,
-                    )
+                    if action == "initial_entry_buy":
+                        position, result = run_initial_entry_if_needed(
+                            cfg,
+                            pool,
+                            position=position,
+                            price=price,
+                            rpc_url=rpc_url,
+                            private_key=private_key,
+                            chain_id=chain_id,
+                        )
+                        if result is None:
+                            result = {"skipped": True}
+                    else:
+                        result = _execute_action(
+                            cfg,
+                            pool,
+                            action,
+                            price,
+                            rpc_url=rpc_url,
+                            private_key=private_key,
+                            chain_id=chain_id,
+                        )
                 except Exception as exc:
-                    print(f"[guard] execute failed: {exc}", flush=True)
-                    raise
-                position = result.get("new_position", position)
-                state["position"] = position
-                state["last_action"] = result
-                print(f"[guard] executed {result}", flush=True)
+                    err_s = str(exc).split("\n", maxsplit=1)[0]
+                    print(
+                        f"[guard] execute failed ({action}): {err_s} — "
+                        f"will retry next poll (STF/slippage widens automatically)",
+                        flush=True,
+                    )
+                    state["pending_action"] = action
+                    state["last_execute_error"] = err_s
+                    state["pending_fail_count"] = int(state.get("pending_fail_count") or 0) + 1
+                    save_guard_state(state, cfg.profile)
+                else:
+                    position = result.get("new_position", position)
+                    state["position"] = position
+                    state["last_action"] = result
+                    state["pending_action"] = None
+                    state["last_execute_error"] = None
+                    state["pending_fail_count"] = 0
+                    print(f"[guard] executed {result}", flush=True)
             state["last_price_usd"] = price
             state["last_epoch"] = epoch
             state["bds_project"] = project_id
