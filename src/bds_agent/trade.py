@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
-import sys
 from dataclasses import dataclass
 from collections.abc import AsyncIterator
 from typing import Any
@@ -14,6 +12,7 @@ from bds_agent.client import BdsClientError, StreamChunk, stream
 
 from eth_account import Account
 from rich.console import Console
+from bds_agent.tty_console import format_price_px, make_tty_console
 from bds_agent.credentials import load_credentials, resolve_profile_name
 from bds_agent.defaults import DEFAULT_BDS_BASE_URL
 from bds_agent.trade_config import resolve_trade_wallet
@@ -91,28 +90,9 @@ PAIR_CONFIG: dict[str, dict[str, str]] = {
 
 def _log_timestamp() -> str:
     """UTC prefix for trader stdout (matches trades log ``timestamp`` field style)."""
-    return utc_now_iso()
+    from bds_agent.tty_console import log_timestamp
 
-
-class TimestampedConsole:
-    """Rich Console wrapper: prefix each ``print`` line with UTC time."""
-
-    def __init__(self, console: Console) -> None:
-        self._console = console
-
-    def print(self, *objects: Any, **kwargs: Any) -> None:
-        if objects:
-            first = objects[0]
-            if isinstance(first, str):
-                objects = (f"[dim]{_log_timestamp()}[/] {first}", *objects[1:])
-            else:
-                objects = (f"[dim]{_log_timestamp()}[/]", *objects)
-        else:
-            objects = (f"[dim]{_log_timestamp()}[/]",)
-        self._console.print(*objects, **kwargs)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._console, name)
+    return log_timestamp()
 
 
 @dataclass
@@ -138,13 +118,7 @@ class TraderConfig:
 
 
 def _trader_console(*, verbose: bool = False) -> Console:
-    """TTY-aware console with UTC timestamps on every line."""
-    no_color = bool(os.environ.get("NO_COLOR"))
-    force = bool(os.environ.get("FORCE_COLOR")) or (
-        verbose and (sys.stdout.isatty() if sys.stdout else False)
-    )
-    base = Console(highlight=False, soft_wrap=True, force_terminal=force, no_color=no_color)
-    return TimestampedConsole(base)  # type: ignore[return-value]
+    return make_tty_console(verbose=verbose)  # type: ignore[return-value]
 
 
 def _gate_markup(ok: bool) -> str:
@@ -194,15 +168,7 @@ def _format_exit_check(chk: ExitCheck) -> str:
 
 
 def _format_price_px(price: float | None) -> str:
-    if price is None or price <= 0:
-        return "—"
-    if price >= 100:
-        return f"{price:.2f}"
-    if price >= 1:
-        return f"{price:.4f}"
-    if price >= 0.01:
-        return f"{price:.6f}"
-    return f"{price:.8f}"
+    return format_price_px(price)
 
 
 def _verbose_show_exit_checks(
@@ -497,10 +463,13 @@ def _position_sell_tokens(
     cfg: TraderConfig,
     wallet_balance: float,
 ) -> float:
-    """Human amount of base token to sell on exit — full on-chain balance (dust sweep)."""
-    _ = pos, cfg
+    """Human base token amount to sell — position record capped by wallet balance."""
+    _ = cfg
     if wallet_balance <= 0:
         return 0.0
+    recorded = float(pos.get("token_balance") or 0.0)
+    if recorded > 0:
+        return min(recorded, wallet_balance)
     return wallet_balance
 
 
@@ -775,7 +744,7 @@ def _execute_entry_live(
         return None
     token_before = get_erc20_balance_human(rpc, pool.base_token, wallet, pool.base_decimals)
     try:
-        tx = swap_usdc_to_token(
+        tx, spent_usd = swap_usdc_to_token(
             rpc,
             pk,
             pool,
@@ -799,7 +768,7 @@ def _execute_entry_live(
         pool,
         price=price,
         epoch_i=epoch_i,
-        size_usd=cfg.size_usd,
+        size_usd=spent_usd,
         entry_tx=tx,
         token_balance=token_delta or token_after,
         dry_run=False,
@@ -816,7 +785,7 @@ def _execute_entry_live(
             "direction": "LONG",
             "epoch": epoch_i,
             "price": price,
-            "size_usd": cfg.size_usd,
+            "size_usd": spent_usd,
             "pool": pool.address,
             "label": pool.label,
             "tx": tx,
@@ -824,7 +793,7 @@ def _execute_entry_live(
         },
         cfg.profile,
     )
-    out.print(f"[green]ENTERED LONG[/] {pool.label} @ {price} tx={tx}")
+    out.print(f"[green]ENTERED LONG[/] {pool.label} @ {price} size=${spent_usd:g} tx={tx}")
     return state
 
 

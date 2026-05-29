@@ -31,5 +31,5 @@ Requires profile with `api_key` and `bds_base_url` (same as `bds-agent trade`).
 ## Related
 
 - **Pulse** (`bds-agent trade run`) — internal consumer of this feed for the price gate
-- **Threshold Guard** (`bds-agent guard run`) — polls `/mpp/token/price/...` for bracket trades
+- **Threshold Guard** (`bds-agent guard run`) — polls `/mpp/token/price/...` for spot %% bracket trades; see **`GUARD.md`**
 - **Future**: `bds-agent mcp` to list/call hosted MCP tool names — see Powerloom `ai-coord-docs` `bds-mpp-integration/16-bds-agent-hosted-mcp-future.md`

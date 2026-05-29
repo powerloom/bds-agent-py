@@ -208,15 +208,18 @@ def ensure_erc20_allowance(
     return tx_hash, next_nonce
 
 
-def _is_stf_revert(exc: BaseException) -> bool:
-    """Uniswap V3 SwapRouter: STF = amountOut below amountOutMinimum."""
+def _is_slippage_revert(exc: BaseException) -> bool:
+    """
+    Uniswap V3 ``exactInputSingle``: ``amountOutMinimum`` failure reverts as
+    ``Too little received``. ``STF`` is a transfer failure, not slippage.
+    """
     msg = str(exc).upper()
-    return "STF" in msg or "SWAP TOO FEW" in msg
+    return "TOO LITTLE RECEIVED" in msg or "SWAP TOO FEW" in msg
 
 
 def _is_swap_retryable(exc: BaseException) -> bool:
-    """True when relaxing ``amountOutMinimum`` or slippage may succeed (STF only)."""
-    return _is_stf_revert(exc)
+    """True when relaxing ``amountOutMinimum`` or slippage may succeed."""
+    return _is_slippage_revert(exc)
 
 
 def _is_non_retryable_swap_error(exc: BaseException) -> bool:
@@ -487,8 +490,12 @@ def swap_usdc_to_token(
     chain_id: int = 1,
     slippage: float = 0.005,
     token_price_usd: float | None = None,
-) -> str:
-    """Buy base token with USDC via the watched pool's fee tier."""
+) -> tuple[str, float]:
+    """Buy base token with USDC via the watched pool's fee tier.
+
+    Returns ``(tx_hash, usdc_spent_human)`` — ``usdc_spent_human`` may be less than
+    ``size_usd`` when the wallet balance caps the swap.
+    """
     if pool.base_idx == 0:
         token_in, token_out = pool.token1, pool.token0
     else:
@@ -510,7 +517,7 @@ def swap_usdc_to_token(
                 expected * (10**pool.base_decimals) * (1.0 - slip),
             )
         try:
-            return send_uniswap_v3_swap(
+            tx = send_uniswap_v3_swap(
                 rpc_url,
                 private_key,
                 token_in,
@@ -520,6 +527,7 @@ def swap_usdc_to_token(
                 chain_id=chain_id,
                 fee=pool.fee,
             )
+            return tx, float(size_usd)
         except Exception as exc:
             last_err = exc
             if _is_non_retryable_swap_error(exc) or not _is_swap_retryable(exc):

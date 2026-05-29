@@ -358,20 +358,68 @@ bds-agent credits usage by-endpoint
 
 ### Threshold Guard (`bds-agent guard`)
 
-Bracket take-profit / stop-loss / re-entry on BDS USD prices (same wallet files as **`trade`**).
+**Bracket guard-rail** on one USDC-quoted Uniswap V3 pool: poll BDS spot USD (`GET /mpp/token/price/{token}/{pool}`), swap on **edge-triggered** crosses. Complements **Pulse** (`trade run`) — set-and-forget %% bounds on a single pool, not tape-driven multi-pool entries.
+
+**Wallet:** same profile API key + **`trade setup-evm`** → **`profiles/<name>.trade.env`** (never billing **`.evm.env`** for swaps).
+
+**State:**
+
+| File | Role |
+|------|------|
+| **`profiles/<name>.guard.json`** | Bracket position (`token` / `reserve`), entry/exit anchors, `guard_exit_reason` |
+| **`profiles/<name>.trader.json`** + **`.trades.jsonl`** | Mirrored ENTRY/EXIT for **`trade status`** / **`pnl`** |
+
+#### Spot mode (default)
+
+Percent bands from entry / last exit — no fixed USD thresholds required.
+
+| Flag | Default | Role |
+|------|---------|------|
+| **`--enter`** | on | USDC → base at BDS spot on start (`--no-enter` if already holding) |
+| **`--take-profit-pct`** | `0.03` | Sell when price rises +X% above entry (e.g. `0.003` = +0.3%) |
+| **`--stop-loss-pct`** | off | Optional sell when price falls −X% below entry |
+| **`--reentry-retrace-pct`** | `0.5` | After exit, dip re-buy on cross **down** (half the gain/loss extension) |
+| **`--reserve-max-minutes`** | `0` | Stop guard in USDC if no dip re-entry within N minutes (`0` = wait forever) |
+| **`--size`** | `25` | USDC per entry / re-entry buy |
+| **`--poll`** | `15` | Seconds between price polls |
+| **`--slippage`** | `0.005` | Uniswap swap tolerance |
+| **`--pool`** / **`--token`** | — | Pool address + base token; pool persisted to `.guard.json` |
+| **`--dry-run`** | off | Log actions without on-chain swaps |
+| **`-v` / `--verbose`** | off | Full pool address in logs |
 
 ```bash
-bds-agent guard run --profile pulse --pool 0x... --token 0x... \
-  --threshold-high 0.00009 --threshold-low 0.00006 --poll 15 --dry-run
-bds-agent guard status --profile pulse   # shows pool_address, base_token, thresholds
+bds-agent signup --profile myguard
+bds-agent trade setup-evm --profile myguard
+
+# Live: tight TP/SL, idle exit after 30m in USDC (orchestrator-friendly)
+bds-agent guard run --profile myguard \
+  --pool 0xE0554a476A092703abdB3Ef35c80e0D76d32939F \
+  --token 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 \
+  --size 5 --take-profit-pct 0.003 --stop-loss-pct 0.002 \
+  --reentry-retrace-pct 0.5 --reserve-max-minutes 30 --poll 5
+
+bds-agent guard status --profile myguard    # .guard.json fields
+bds-agent trade status --profile myguard    # LONG / FLAT + P/L after fills
+bds-agent trade history --profile myguard
 ```
 
-Full guard CLI reference: **`docs/GUARD.md`**.
+**Logs:** UTC timestamp + Rich colors (same style as **`trade run --verbose`**). `NO_COLOR=1` disables color.
+
+**After take-profit:** position is **`reserve`** (USDC). Re-entry only on **cross down** through `reentry_below` (shown in ticks as `last_exit=… reentry_below=…`). Price ripping higher → **`hold`** until dip or **`--reserve-max-minutes`** idle exit.
+
+#### Explicit mode (fixed USD levels)
+
+Pass **both** thresholds; default **`--no-enter`** if you already hold base:
 
 ```bash
-# After first run, pool is read from .guard.json if --pool omitted
-bds-agent guard run --profile pulse --threshold-high 2010 --threshold-low 2001
+bds-agent guard run --profile myguard \
+  --pool 0xE0554a476A092703abdB3Ef35c80e0D76d32939F \
+  --token 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 \
+  --threshold-high 2010 --threshold-low 2007 \
+  --no-enter --poll 15 --reentry-on-breakout
 ```
+
+Full reference: **`docs/GUARD.md`**. Orchestrator index: **`SKILL.md`** (repo root).
 
 ### Pulse trader (`bds-agent trade`)
 

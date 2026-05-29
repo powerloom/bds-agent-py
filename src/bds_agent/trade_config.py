@@ -68,6 +68,27 @@ def write_trade_env_file(
     return p
 
 
+def resolve_trade_rpc(*, required: bool = True) -> str:
+    """RPC URL from `.trade.env` (no private key)."""
+    load_trade_env_file()
+    rpc = (os.environ.get(TRADE_RPC_URL_ENV) or "").strip()
+    if not rpc and required:
+        raise RuntimeError(
+            f"{TRADE_RPC_URL_ENV} not set. Run: bds-agent trade setup-evm "
+            "(RPC only is enough for guard --dry-run price checks)",
+        )
+    return rpc
+
+
+def resolve_trade_chain_id() -> int:
+    load_trade_env_file()
+    chain_raw = (os.environ.get(TRADE_CHAIN_ID_ENV) or "1").strip()
+    try:
+        return int(chain_raw)
+    except ValueError as e:
+        raise RuntimeError(f"Invalid {TRADE_CHAIN_ID_ENV}: {chain_raw!r}") from e
+
+
 def resolve_trade_wallet() -> tuple[str, str, int]:
     """
     Load trading key/RPC from `.trade.env` only (never billing `.evm.env`).
@@ -82,14 +103,6 @@ def resolve_trade_wallet() -> tuple[str, str, int]:
         )
     if not pk.startswith("0x"):
         pk = "0x" + pk
-    rpc = (os.environ.get(TRADE_RPC_URL_ENV) or "").strip()
-    if not rpc:
-        raise RuntimeError(
-            f"{TRADE_RPC_URL_ENV} not set. Run: bds-agent trade setup-evm",
-        )
-    chain_raw = (os.environ.get(TRADE_CHAIN_ID_ENV) or "1").strip()
-    try:
-        chain_id = int(chain_raw)
-    except ValueError as e:
-        raise RuntimeError(f"Invalid {TRADE_CHAIN_ID_ENV}: {chain_raw!r}") from e
+    rpc = resolve_trade_rpc(required=True)
+    chain_id = resolve_trade_chain_id()
     return pk, rpc, chain_id

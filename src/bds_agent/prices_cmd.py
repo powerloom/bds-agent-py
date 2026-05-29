@@ -7,23 +7,34 @@ from typing import Any
 
 from bds_agent.credentials import load_credentials
 from bds_agent.defaults import DEFAULT_BDS_BASE_URL
+from bds_agent.paths import profiles_dir, sanitize_profile_name
 from bds_agent.profile_env import resolve_bds_base_url
 from bds_agent.usd_prices import fetch_all_token_prices, fetch_token_usd_in_pool
 from web3 import Web3
 
 
+def _load_profile_credentials(profile: str | None):
+    """Credentials for ``profile`` or CLI/env/active profile (same precedence as signup)."""
+    if profile and str(profile).strip():
+        path = profiles_dir() / f"{sanitize_profile_name(profile.strip())}.json"
+        return load_credentials(path)
+    return load_credentials()
+
+
 def _resolve_api_key(profile: str | None) -> str:
-    """Resolve API key from active profile (set ``--profile`` / ``BDS_AGENT_PROFILE`` before call)."""
-    _ = profile  # CLI applies profile via env; load_credentials() reads active profile file
-    creds = load_credentials()
+    """Resolve API key from ``--profile`` / ``BDS_AGENT_PROFILE`` / active profile."""
+    creds = _load_profile_credentials(profile)
     key = (creds or {}).get("api_key")
     if not isinstance(key, str) or not key.strip():
-        raise RuntimeError("Invalid or missing api_key in profile credentials.")
+        hint = f"profile {profile!r}" if profile else "active profile"
+        raise RuntimeError(f"Invalid or missing api_key in {hint} credentials.")
     return key.strip()
 
 
 def _resolve_base_url(profile: str | None) -> str:
-    _ = profile
+    creds = _load_profile_credentials(profile)
+    if creds and creds.get("bds_base_url"):
+        return str(creds["bds_base_url"]).rstrip("/")
     bu = resolve_bds_base_url()
     return (bu or DEFAULT_BDS_BASE_URL).rstrip("/")
 

@@ -3,33 +3,36 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from rich.console import Console
 from web3 import Web3
 
 from bds_agent.active_markets import WatchedPool, fetch_watched_pool
-from bds_agent.catalog import DEFAULT_MARKET
 from bds_agent.credentials import resolve_profile_name
 from bds_agent.evm_swap import get_erc20_balance_human, swap_token_to_usdc, swap_usdc_to_token
 from bds_agent.guard_state import load_guard_state, save_guard_state
 from bds_agent.prices_cmd import _resolve_api_key, _resolve_base_url
-from bds_agent.profile_env import env_or_profile
-from bds_agent.trade_config import resolve_trade_wallet
-from bds_agent.usd_prices import (
-    base_snapshot_project_id,
-    fetch_last_finalized_epoch,
-    fetch_token_usd_in_pool,
+from bds_agent.trade_config import (
+    resolve_trade_chain_id,
+    resolve_trade_rpc,
+    resolve_trade_wallet,
 )
+from bds_agent.tty_console import TimestampedConsole, format_price_px, make_tty_console
+from bds_agent.usd_prices import fetch_token_usd_in_pool
+
+PricingMode = Literal["spot", "explicit"]
+DEFAULT_TAKE_PROFIT_PCT = 0.03
 
 Position = Literal["token", "reserve"]
 
 
 @dataclass
 class GuardConfig:
-    threshold_high: float
-    threshold_low: float
+    """Spot mode (default): enter at BDS spot; exit at +take-profit %%; dip-reenter after partial giveback."""
+
     pool: str | None = None
     base_token: str | None = None
     poll_seconds: float = 15.0
@@ -38,21 +41,84 @@ class GuardConfig:
     dry_run: bool = False
     profile: str | None = None
     max_ticks: int = 0
-    bds_namespace: str | None = None
     verbose: bool = False
-    enter: bool = False
+    enter: bool | None = None
     enter_min_base: float = 1e-6
+    # Explicit USD bands (compose / advanced)
+    threshold_high: float | None = None
+    threshold_low: float | None = None
     reentry_on_breakout: bool = False
+    # Spot mode (% moves from entry / last exit)
+    take_profit_pct: float | None = None
+    stop_loss_pct: float | None = None
+    reentry_retrace_pct: float = 0.5
+    # Exit guard after N minutes in USDC waiting for dip re-entry (0 = wait forever).
+    reserve_max_minutes: float = 0.0
 
 
 def utc_now_iso() -> str:
-    return datetime.now(tz=UTC).isoformat()
+    return datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace(
+        "+00:00",
+        "Z",
+    )
 
 
-def _bds_namespace(cfg: GuardConfig) -> str:
-    if cfg.bds_namespace and str(cfg.bds_namespace).strip():
-        return str(cfg.bds_namespace).strip()
-    return env_or_profile("BDS_MARKET_NAME") or DEFAULT_MARKET
+def _parse_iso_utc(raw: str | None) -> datetime | None:
+    if not raw or not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
+def sync_reserve_since(state: dict[str, Any], position: Position) -> None:
+    """Track when we entered USDC (reserve) for idle timeout."""
+    if position == "reserve":
+        if not state.get("reserve_since"):
+            state["reserve_since"] = state.get("updated_at") or utc_now_iso()
+    else:
+        state.pop("reserve_since", None)
+
+
+def reserve_idle_seconds(
+    state: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    if state.get("position") != "reserve":
+        return None
+    started = _parse_iso_utc(state.get("reserve_since"))
+    if started is None:
+        return None
+    now_dt = now or datetime.now(tz=UTC)
+    return max(0.0, (now_dt - started).total_seconds())
+
+
+def reserve_idle_timed_out(reserve_max_minutes: float, state: dict[str, Any]) -> bool:
+    if reserve_max_minutes <= 0:
+        return False
+    elapsed = reserve_idle_seconds(state)
+    if elapsed is None:
+        return False
+    return elapsed >= reserve_max_minutes * 60.0
+
+
+def _reserve_idle_note(cfg: GuardConfig, state: dict[str, Any]) -> str:
+    if cfg.reserve_max_minutes <= 0 or state.get("position") != "reserve":
+        return ""
+    elapsed = reserve_idle_seconds(state)
+    if elapsed is None:
+        return ""
+    limit_s = cfg.reserve_max_minutes * 60.0
+    max(0.0, limit_s - elapsed)
+    return f" [dim]reserve_idle={int(elapsed)}s/{int(limit_s)}s[/]"
 
 
 def resolve_guard_pool_address(cfg: GuardConfig, state: dict[str, Any]) -> str:
@@ -81,6 +147,40 @@ def resolve_guard_base_token(cfg: GuardConfig, pool: WatchedPool) -> str:
     return pool.base_token
 
 
+def _resolve_guard_evm(cfg: GuardConfig) -> tuple[str | None, str | None, int]:
+    """
+    Trading credentials for guard.
+
+    Dry-run: no private key; RPC optional (for on-chain pool enrichment only).
+    Live: full ``resolve_trade_wallet()``.
+    """
+    if cfg.dry_run:
+        try:
+            rpc = resolve_trade_rpc(required=False)
+        except RuntimeError:
+            rpc = ""
+        rpc = rpc.strip() if rpc else None
+        return None, rpc, resolve_trade_chain_id()
+    pk, rpc, chain_id = resolve_trade_wallet()
+    return pk, rpc, chain_id
+
+
+def _prepare_guard_pool(
+    cfg: GuardConfig,
+    state: dict[str, Any],
+    *,
+    rpc_url: str | None,
+) -> tuple[WatchedPool, str]:
+    """BDS pool metadata, optional on-chain enrich, then base token for price routes."""
+    from bds_agent.evm_swap import enrich_watched_pool_fee
+
+    pool = _resolve_watched_pool(cfg, state)
+    if rpc_url:
+        pool = enrich_watched_pool_fee(rpc_url, pool)
+    base_token = resolve_guard_base_token(cfg, pool)
+    return pool, base_token
+
+
 def _resolve_watched_pool(cfg: GuardConfig, state: dict[str, Any]) -> WatchedPool:
     pool_addr = resolve_guard_pool_address(cfg, state)
     api_key = _resolve_api_key(cfg.profile)
@@ -99,30 +199,291 @@ def _resolve_watched_pool(cfg: GuardConfig, state: dict[str, Any]) -> WatchedPoo
     )
 
 
-def _bds_price_context(
+def _fetch_guard_price_usd(
     cfg: GuardConfig,
     pool: WatchedPool,
     *,
     base_token: str,
-) -> tuple[float | None, int | None, str]:
+) -> float | None:
     """
-    USD spot from BDS at the snapshotter's latest epoch (not RPC chain head).
+    Pool-scoped USD price from BDS (resolver picks latest snapshot server-side).
 
-    Returns (price, epoch_id, base_snapshot_project_id).
+    No ``last_finalized_epoch`` or snapshot project id — those are resolver internals.
     """
     api_key = _resolve_api_key(cfg.profile)
     base_url = _resolve_base_url(cfg.profile)
-    namespace = _bds_namespace(cfg)
-    project_id = base_snapshot_project_id(pool.address, namespace)
-    epoch = fetch_last_finalized_epoch(base_url, api_key, project_id)
-    price = fetch_token_usd_in_pool(
+    return fetch_token_usd_in_pool(
         base_url,
         api_key,
         base_token,
         pool.address,
         None,
     )
-    return price, epoch, project_id
+
+
+def guard_pricing_mode(cfg: GuardConfig) -> PricingMode:
+    if cfg.threshold_high is not None and cfg.threshold_low is not None:
+        return "explicit"
+    return "spot"
+
+
+def normalize_guard_config(cfg: GuardConfig) -> GuardConfig:
+    """Resolve spot vs explicit mode and defaults before run."""
+    if (cfg.threshold_high is None) != (cfg.threshold_low is None):
+        raise RuntimeError(
+            "Pass both --threshold-high and --threshold-low for explicit mode, "
+            "or neither for spot mode (--take-profit-pct).",
+        )
+    mode = guard_pricing_mode(cfg)
+    if mode == "explicit":
+        validate_threshold_brackets(cfg.threshold_high, cfg.threshold_low)
+        enter = cfg.enter if cfg.enter is not None else False
+        return replace(cfg, enter=enter, take_profit_pct=None)
+    tp = cfg.take_profit_pct if cfg.take_profit_pct is not None else DEFAULT_TAKE_PROFIT_PCT
+    if tp <= 0:
+        raise RuntimeError("--take-profit-pct must be > 0 (e.g. 0.03 for +3%).")
+    if not 0 < cfg.reentry_retrace_pct <= 1:
+        raise RuntimeError("--reentry-retrace-pct must be in (0, 1] (default 0.5 = half the gain).")
+    if cfg.stop_loss_pct is not None:
+        sl = float(cfg.stop_loss_pct)
+        if sl <= 0 or sl >= 1:
+            raise RuntimeError("--stop-loss-pct must be in (0, 1) (e.g. 0.02 for -2%).")
+        if sl >= tp:
+            raise RuntimeError(
+                f"--stop-loss-pct ({sl}) must be less than --take-profit-pct ({tp}).",
+            )
+    if cfg.reserve_max_minutes < 0:
+        raise RuntimeError("--reserve-max-minutes must be >= 0 (0 = no idle exit).")
+    enter = cfg.enter if cfg.enter is not None else True
+    return replace(
+        cfg,
+        enter=enter,
+        take_profit_pct=tp,
+        threshold_high=None,
+        threshold_low=None,
+    )
+
+
+# Internal reserve high band: blocks breakout re-entry in spot mode (not shown in logs).
+_RESERVE_BREAKOUT_BLOCK = 1e6
+
+
+def format_guard_band_log(
+    cfg: GuardConfig,
+    state: dict[str, Any],
+    *,
+    position: Position,
+    band_high: float,
+    band_low: float,
+) -> str:
+    if guard_pricing_mode(cfg) == "explicit":
+        return (
+            f" [dim]low=[/][yellow]${band_low:g}[/]"
+            f" [dim]high=[/][green]${band_high:g}[/]"
+        )
+    if position == "token":
+        stop_s = (
+            f" [dim]stop=[/][yellow]${band_low:g}[/]"
+            if band_low > 0
+            else ""
+        )
+        return f"{stop_s} [dim]tp=[/][green]${band_high:g}[/]"
+    exit_raw = state.get("last_exit_usd")
+    exit_s = ""
+    if exit_raw is not None and float(exit_raw) > 0:
+        exit_s = f" [dim]last_exit=[/][bold]{format_price_px(float(exit_raw))}[/]"
+    return f"{exit_s} [dim]reentry_below=[/][cyan]${band_low:g}[/]"
+
+
+def _guard_position_markup(position: Position) -> str:
+    if position == "token":
+        return "[bold green]token[/]"
+    return "[bold cyan]reserve[/]"
+
+
+def _guard_action_markup(action: str | None) -> str:
+    if not action or action == "hold":
+        return "[dim]hold[/]"
+    if action in ("take_profit_sell", "reentry_buy_dip", "reentry_buy_breakout", "initial_entry_buy"):
+        return f"[bold green]{action}[/]"
+    if action == "stop_loss_sell":
+        return f"[bold red]{action}[/]"
+    return f"[bold yellow]{action}[/]"
+
+
+def _guard_pool_tag(cfg: GuardConfig, pool: WatchedPool) -> str:
+    if cfg.verbose:
+        return pool.address
+    return f"{pool.label} [dim]{pool.address}[/]"
+
+
+def _print_guard_startup(
+    out: Console,
+    *,
+    cfg: GuardConfig,
+    pool: WatchedPool,
+    base_token: str,
+    position: Position,
+    mode: str,
+    chain_id: int,
+    bands_note: str,
+    wallet_line: str,
+    pool_from_state: bool,
+) -> None:
+    enter_s = "[green]on[/]" if cfg.enter else "[dim]off[/]"
+    dry_s = "[yellow]dry_run[/]" if cfg.dry_run else "[dim]live[/]"
+    out.print(
+        f"[bold blue]GUARD[/] [bold]{pool.label}[/] [dim]{pool.address}[/] "
+        f"base=[cyan]{base_token}[/] pos={_guard_position_markup(position)} "
+        f"mode=[cyan]{mode}[/] poll={cfg.poll_seconds}s {dry_s} enter={enter_s} "
+        f"size=${cfg.size_usd:g} fee={pool.fee} chain={chain_id}{bands_note} "
+        f"{wallet_line}"
+        + (f" tp%={effective_take_profit_pct(cfg):g}"
+           f" sl%={cfg.stop_loss_pct!s}"
+           f" retrace={cfg.reentry_retrace_pct:g}" if mode == "spot" else "")
+        + (
+            f" reserve_max={cfg.reserve_max_minutes:g}m"
+            if cfg.reserve_max_minutes > 0
+            else ""
+        )
+        + (" [dim]pool_source=state[/]" if pool_from_state else ""),
+    )
+
+
+def _print_guard_tick(
+    out: Console,
+    *,
+    ticks: int,
+    pool_tag: str,
+    base_token: str,
+    price: float | None,
+    position: Position,
+    band_s: str,
+    action: str | None,
+    band_err: str | None,
+    idle_note: str = "",
+) -> None:
+    pos_m = _guard_position_markup(position)
+    act_m = _guard_action_markup(action)
+    err_s = f" [red]({band_err})[/]" if band_err else ""
+    if price is None:
+        out.print(
+            f"[bold blue]GUARD[/] [dim]tick={ticks}[/] {pool_tag} "
+            f"base=[dim]{base_token}[/] [yellow]price=unavailable[/] "
+            f"pos={pos_m} {act_m}{err_s}{idle_note} "
+            "[dim italic](no USD from BDS; snapshotter may still be processing)[/]",
+        )
+        return
+    out.print(
+        f"[bold blue]GUARD[/] [dim]tick={ticks}[/] {pool_tag} "
+        f"px=[bold]{format_price_px(price)}[/] pos={pos_m}{band_s}{idle_note} "
+        f"→ {act_m}{err_s}",
+    )
+
+
+def effective_take_profit_pct(cfg: GuardConfig) -> float:
+    if cfg.take_profit_pct is None:
+        return DEFAULT_TAKE_PROFIT_PCT
+    return float(cfg.take_profit_pct)
+
+
+def resolve_guard_bands(
+    cfg: GuardConfig,
+    state: dict[str, Any],
+    *,
+    position: Position,
+) -> tuple[float, float]:
+    """
+    USD levels for edge-triggered crosses.
+
+    Spot + token: take profit at entry * (1 + take_profit_pct);
+    optional stop loss at entry * (1 - stop_loss_pct).
+    Spot + reserve: re-enter on cross **down** — after a win, partial giveback
+    of the gain; after a stop, a further dip below the exit (cheaper re-entry).
+    """
+    if guard_pricing_mode(cfg) == "explicit":
+        return float(cfg.threshold_high), float(cfg.threshold_low)
+
+    entry_raw = state.get("reference_entry_usd")
+    if entry_raw is None or float(entry_raw) <= 0:
+        raise RuntimeError(
+            "Spot mode needs a reference entry price. Run with --enter, or set "
+            "reference_entry_usd in .guard.json after a buy.",
+        )
+    entry = float(entry_raw)
+    tp = effective_take_profit_pct(cfg)
+
+    if position == "token":
+        high = entry * (1.0 + tp)
+        if cfg.stop_loss_pct is not None and cfg.stop_loss_pct > 0:
+            low = entry * (1.0 - float(cfg.stop_loss_pct))
+        else:
+            low = 0.0
+        return high, low
+
+    exit_raw = state.get("last_exit_usd")
+    if exit_raw is None or float(exit_raw) <= 0:
+        raise RuntimeError(
+            "Spot mode in USDC (reserve) needs last_exit_usd from a prior exit.",
+        )
+    exit_price = float(exit_raw)
+    margin = exit_price - entry
+    retrace = cfg.reentry_retrace_pct
+    if margin > 0:
+        reentry = exit_price - retrace * margin
+    else:
+        reentry = exit_price - retrace * (entry - exit_price)
+    return exit_price * _RESERVE_BREAKOUT_BLOCK, reentry
+
+
+def _after_guard_fill(
+    *,
+    cfg: GuardConfig,
+    pool: WatchedPool,
+    state: dict[str, Any],
+    action: str,
+    result: dict[str, Any],
+    price: float | None,
+    rpc_url: str | None,
+    private_key: str | None,
+) -> None:
+    """Persist fill to trades log + trader.json; update spot anchors."""
+    from bds_agent.guard_trade_sync import record_guard_fill
+
+    act = result.get("action") or action
+    if isinstance(act, str):
+        record_guard_fill(
+            profile=cfg.profile,
+            pool=pool,
+            size_usd=cfg.size_usd,
+            dry_run=cfg.dry_run,
+            guard_state=state,
+            action=act,
+            result=result,
+            price=price,
+            rpc_url=rpc_url,
+            private_key=private_key,
+        )
+    if guard_pricing_mode(cfg) == "spot" and isinstance(act, str):
+        _record_spot_reference(state, action=act, price=price)
+    new_pos = result.get("new_position")
+    if new_pos in ("token", "reserve"):
+        sync_reserve_since(state, new_pos)
+
+
+def _record_spot_reference(
+    state: dict[str, Any],
+    *,
+    action: str,
+    price: float | None,
+) -> None:
+    if price is None or price <= 0:
+        return
+    if action in ("take_profit_sell", "stop_loss_sell"):
+        state["last_exit_usd"] = price
+    elif action in ("reentry_buy_dip", "reentry_buy_breakout", "initial_entry_buy"):
+        state["reference_entry_usd"] = price
+        state["last_exit_usd"] = None
 
 
 def _sync_guard_config_state(
@@ -131,14 +492,18 @@ def _sync_guard_config_state(
     pool: WatchedPool,
     base_token: str,
     cfg: GuardConfig,
-    project_id: str,
 ) -> None:
     state["pool_address"] = pool.address
     state["pool_label"] = pool.label
     state["base_token"] = base_token
-    state["threshold_high"] = cfg.threshold_high
-    state["threshold_low"] = cfg.threshold_low
-    state["bds_project"] = project_id
+    state["pricing_mode"] = guard_pricing_mode(cfg)
+    state["take_profit_pct"] = cfg.take_profit_pct
+    state["stop_loss_pct"] = cfg.stop_loss_pct
+    state["reentry_retrace_pct"] = cfg.reentry_retrace_pct
+    state["reserve_max_minutes"] = cfg.reserve_max_minutes
+    if guard_pricing_mode(cfg) == "explicit":
+        state["threshold_high"] = cfg.threshold_high
+        state["threshold_low"] = cfg.threshold_low
 
 
 def validate_threshold_brackets(threshold_high: float, threshold_low: float) -> None:
@@ -219,7 +584,7 @@ def _execute_action(
         )
         return {"action": action, "tx_hash": tx, "new_position": "reserve"}
     if action in ("reentry_buy_dip", "reentry_buy_breakout"):
-        tx = swap_usdc_to_token(
+        tx, spent_usd = swap_usdc_to_token(
             rpc_url,
             private_key,
             pool,
@@ -228,7 +593,12 @@ def _execute_action(
             token_price_usd=price,
             chain_id=chain_id,
         )
-        return {"action": action, "tx_hash": tx, "new_position": "token"}
+        return {
+            "action": action,
+            "tx_hash": tx,
+            "size_usd": spent_usd,
+            "new_position": "token",
+        }
     raise RuntimeError(f"Unknown action: {action}")
 
 
@@ -263,7 +633,7 @@ def execute_initial_entry(
             "price_usd": price,
             "new_position": "token",
         }
-    tx = swap_usdc_to_token(
+    tx, spent_usd = swap_usdc_to_token(
         rpc_url,
         private_key,
         pool,
@@ -275,7 +645,7 @@ def execute_initial_entry(
     return {
         "action": "initial_entry_buy",
         "tx_hash": tx,
-        "size_usd": cfg.size_usd,
+        "size_usd": spent_usd,
         "price_usd": price,
         "new_position": "token",
     }
@@ -287,8 +657,8 @@ def run_initial_entry_if_needed(
     *,
     position: Position,
     price: float | None,
-    rpc_url: str,
-    private_key: str,
+    rpc_url: str | None,
+    private_key: str | None,
     chain_id: int,
 ) -> tuple[Position, dict[str, Any] | None]:
     """
@@ -306,6 +676,24 @@ def run_initial_entry_if_needed(
         raise RuntimeError(
             "--enter requires a BDS USD price for sizing the USDC → base swap; "
             "price unavailable on startup",
+        )
+    if cfg.dry_run:
+        result = execute_initial_entry(
+            cfg,
+            pool,
+            price=price,
+            base_balance_human=0.0,
+            rpc_url=rpc_url or "",
+            private_key=private_key or "",
+            chain_id=chain_id,
+        )
+        new_pos = result.get("new_position", "token")
+        if new_pos in ("token", "reserve"):
+            position = new_pos
+        return position, result
+    if not private_key or not rpc_url:
+        raise RuntimeError(
+            "Live --enter requires trade wallet. Run: bds-agent trade setup-evm",
         )
     owner = Account.from_key(private_key.strip()).address
     w3 = _web3(rpc_url)
@@ -348,50 +736,74 @@ def run_initial_entry_if_needed(
 
 
 def run_guard_sync(cfg: GuardConfig) -> None:
-    validate_threshold_brackets(cfg.threshold_high, cfg.threshold_low)
+    out: TimestampedConsole = make_tty_console(verbose=cfg.verbose)
+    cfg = normalize_guard_config(cfg)
     state = load_guard_state(cfg.profile)
-    pool = _resolve_watched_pool(cfg, state)
-    base_token = resolve_guard_base_token(cfg, pool)
-    private_key, rpc_url, chain_id = resolve_trade_wallet()
-    from bds_agent.evm_swap import enrich_watched_pool_fee, get_token_balances_human
-
-    pool = enrich_watched_pool_fee(rpc_url, pool)
+    private_key, rpc_url, chain_id = _resolve_guard_evm(cfg)
+    pool, base_token = _prepare_guard_pool(cfg, state, rpc_url=rpc_url)
+    from bds_agent.evm_swap import get_token_balances_human
     position: Position = state.get("position") if state.get("position") in ("token", "reserve") else "token"
-    namespace = _bds_namespace(cfg)
-    project_id = base_snapshot_project_id(pool.address, namespace)
     _sync_guard_config_state(
         state,
         pool=pool,
         base_token=base_token,
         cfg=cfg,
-        project_id=project_id,
     )
     save_guard_state(state, cfg.profile)
+    sync_reserve_since(state, position)
 
     pool_from_state = not (cfg.pool and str(cfg.pool).strip())
-    from eth_account import Account
+    usdc_bal = 0.0
+    wallet_line = "wallet_usdc=n/a wallet_weth=n/a"
+    if private_key and rpc_url:
+        from eth_account import Account
 
-    owner = Account.from_key(private_key.strip()).address
-    usdc_bal, weth_bal = get_token_balances_human(rpc_url, owner)
-    print(
-        f"guard pool={pool.label} pool_addr={pool.address} "
-        f"base_token={base_token} position={position} "
-        f"high={cfg.threshold_high} low={cfg.threshold_low} "
-        f"poll={cfg.poll_seconds}s dry_run={cfg.dry_run} "
-        f"enter={cfg.enter} size_usd={cfg.size_usd} pool_fee={pool.fee} "
-        f"chain_id={chain_id} wallet_usdc=${usdc_bal:g} wallet_weth={weth_bal:g} "
-        f"bds_project={project_id}"
-        + (" pool_source=state" if pool_from_state else ""),
-        flush=True,
+        owner = Account.from_key(private_key.strip()).address
+        usdc_bal, weth_bal = get_token_balances_human(rpc_url, owner)
+        wallet_line = f"wallet_usdc=${usdc_bal:g} wallet_weth={weth_bal:g}"
+    mode = guard_pricing_mode(cfg)
+    bands_note = ""
+    if mode == "spot" and state.get("reference_entry_usd"):
+        try:
+            hi, lo = resolve_guard_bands(cfg, state, position=position)
+            bands_note = format_guard_band_log(
+                cfg,
+                state,
+                position=position,
+                band_high=hi,
+                band_low=lo,
+            )
+        except RuntimeError:
+            bands_note = ""
+    elif mode == "explicit":
+        bands_note = (
+            f" high=[green]{cfg.threshold_high}[/] low=[yellow]{cfg.threshold_low}[/]"
+        )
+    _print_guard_startup(
+        out,
+        cfg=cfg,
+        pool=pool,
+        base_token=base_token,
+        position=position,
+        mode=mode,
+        chain_id=chain_id,
+        bands_note=bands_note,
+        wallet_line=wallet_line,
+        pool_from_state=pool_from_state,
     )
-    if cfg.enter and usdc_bal < cfg.size_usd * 0.99:
-        print(
-            f"[guard] warning: USDC balance ${usdc_bal:g} < --size ${cfg.size_usd:g}; "
+    if (
+        cfg.enter
+        and private_key
+        and rpc_url
+        and usdc_bal < cfg.size_usd * 0.99
+    ):
+        out.print(
+            "[bold yellow]WARN[/] USDC balance "
+            f"[red]${usdc_bal:g}[/] < size [yellow]${cfg.size_usd:g}[/] — "
             "entry swap will fail until you top up USDC",
-            flush=True,
         )
 
-    startup_price, startup_epoch, _ = _bds_price_context(cfg, pool, base_token=base_token)
+    startup_price = _fetch_guard_price_usd(cfg, pool, base_token=base_token)
     if cfg.enter:
         try:
             position, entry_result = run_initial_entry_if_needed(
@@ -405,9 +817,9 @@ def run_guard_sync(cfg: GuardConfig) -> None:
             )
         except Exception as exc:
             err_s = str(exc).split("\n", maxsplit=1)[0]
-            print(
-                f"[guard] enter failed: {err_s} — will retry as pending_action",
-                flush=True,
+            out.print(
+                f"[bold red]ENTER FAIL[/] {err_s} "
+                "[dim]— will retry as pending_action[/]",
             )
             state["pending_action"] = "initial_entry_buy"
             state["last_execute_error"] = err_s
@@ -418,48 +830,115 @@ def run_guard_sync(cfg: GuardConfig) -> None:
             state["pending_action"] = None
             state["last_execute_error"] = None
             state["last_price_usd"] = startup_price
-            state["last_epoch"] = startup_epoch
             state["updated_at"] = utc_now_iso()
             save_guard_state(state, cfg.profile)
-            print(f"[guard] enter {entry_result}", flush=True)
+            out.print(f"[bold green]ENTER[/] {entry_result}")
+            if entry_result and not entry_result.get("skipped"):
+                _after_guard_fill(
+                    cfg=cfg,
+                    pool=pool,
+                    state=state,
+                    action="initial_entry_buy",
+                    result=entry_result,
+                    price=startup_price,
+                    rpc_url=rpc_url,
+                    private_key=private_key,
+                )
+                save_guard_state(state, cfg.profile)
 
     ticks = 0
+    pool_tag = _guard_pool_tag(cfg, pool)
+    idle_note = _reserve_idle_note(cfg, state)
     while True:
         ticks += 1
-        price, epoch, _ = _bds_price_context(cfg, pool, base_token=base_token)
-        pool_tag = pool.address if cfg.verbose else f"{pool.label} {pool.address}"
+        sync_reserve_since(state, position)
+        if reserve_idle_timed_out(cfg.reserve_max_minutes, state):
+            state["guard_exit_reason"] = "reserve_idle_timeout"
+            state["updated_at"] = utc_now_iso()
+            save_guard_state(state, cfg.profile)
+            out.print(
+                f"[bold yellow]IDLE EXIT[/] no dip re-entry within "
+                f"[cyan]{cfg.reserve_max_minutes:g}[/] min in "
+                f"{_guard_position_markup('reserve')} — guard stopped "
+                "[dim](orchestrator can start a new run)[/]",
+            )
+            break
+        idle_note = _reserve_idle_note(cfg, state)
+        price = _fetch_guard_price_usd(cfg, pool, base_token=base_token)
         if price is None:
-            epoch_s = str(epoch) if epoch is not None else "unknown"
-            print(
-                f"[guard] tick={ticks} pool={pool_tag} base_token={base_token} "
-                f"price=unavailable "
-                f"(no USD at BDS last-finalized epoch {epoch_s}; "
-                f"snapshotter may still be processing)",
-                flush=True,
+            _print_guard_tick(
+                out,
+                ticks=ticks,
+                pool_tag=pool_tag,
+                base_token=base_token,
+                price=None,
+                position=position,
+                band_s="",
+                action=None,
+                band_err=None,
+                idle_note=idle_note,
             )
         else:
-            epoch_s = str(epoch) if epoch is not None else "latest-submitted"
+            action: str | None = None
+            band_high: float | None = None
+            band_low: float | None = None
+            band_err: str | None = None
             raw_prev = state.get("last_price_usd")
             prev_price = float(raw_prev) if isinstance(raw_prev, (int, float)) else None
             pending = state.get("pending_action")
             if isinstance(pending, str) and pending.strip():
                 action = pending.strip()
             else:
-                action = evaluate_threshold_cross(
-                    price=price,
-                    prev_price=prev_price,
+                if (
+                    guard_pricing_mode(cfg) == "spot"
+                    and position == "token"
+                    and not state.get("reference_entry_usd")
+                    and price > 0
+                ):
+                    state["reference_entry_usd"] = price
+                try:
+                    band_high, band_low = resolve_guard_bands(
+                        cfg,
+                        state,
+                        position=position,
+                    )
+                except RuntimeError as exc:
+                    band_err = str(exc).split("\n", maxsplit=1)[0]
+                else:
+                    action = evaluate_threshold_cross(
+                        price=price,
+                        prev_price=prev_price,
+                        position=position,
+                        threshold_high=band_high,
+                        threshold_low=band_low,
+                        reentry_on_breakout=(
+                            cfg.reentry_on_breakout
+                            if guard_pricing_mode(cfg) == "explicit"
+                            else False
+                        ),
+                    )
+            band_s = ""
+            if band_high is not None and band_low is not None:
+                band_s = format_guard_band_log(
+                    cfg,
+                    state,
                     position=position,
-                    threshold_high=cfg.threshold_high,
-                    threshold_low=cfg.threshold_low,
-                    reentry_on_breakout=cfg.reentry_on_breakout,
+                    band_high=band_high,
+                    band_low=band_low,
                 )
-            print(
-                f"[guard] tick={ticks} pool={pool_tag} base_token={base_token} "
-                f"bds_epoch={epoch_s} price=${price:.8g} "
-                f"position={position} action={action or 'hold'}",
-                flush=True,
+            _print_guard_tick(
+                out,
+                ticks=ticks,
+                pool_tag=pool_tag,
+                base_token=base_token,
+                price=price,
+                position=position,
+                band_s=band_s,
+                action=action,
+                band_err=band_err,
+                idle_note=idle_note,
             )
-            if action:
+            if action and not band_err:
                 pending_retry = (
                     isinstance(state.get("pending_action"), str)
                     and state.get("pending_action") == action
@@ -467,16 +946,14 @@ def run_guard_sync(cfg: GuardConfig) -> None:
                 if pending_retry:
                     fails = int(state.get("pending_fail_count") or 0)
                     wait_s = min(90.0, cfg.poll_seconds * (2 ** min(fails, 5)))
-                    print(
-                        f"[guard] retrying pending {action} "
-                        f"(attempt {fails + 1}, backoff {wait_s:.0f}s)...",
-                        flush=True,
+                    out.print(
+                        f"[yellow]RETRY[/] pending {_guard_action_markup(action)} "
+                        f"[dim](attempt {fails + 1}, backoff {wait_s:.0f}s)[/]",
                     )
                     time.sleep(wait_s)
-                print(
-                    f"[guard] executing {action} (on-chain; may take 1–5 min: "
-                    f"pending mempool, approve, swap, confirmation)...",
-                    flush=True,
+                out.print(
+                    f"[bold yellow]EXEC[/] {_guard_action_markup(action)} "
+                    "[dim](on-chain 1–5 min: mempool, approve, swap, confirm)[/]",
                 )
                 try:
                     if action == "initial_entry_buy":
@@ -503,10 +980,9 @@ def run_guard_sync(cfg: GuardConfig) -> None:
                         )
                 except Exception as exc:
                     err_s = str(exc).split("\n", maxsplit=1)[0]
-                    print(
-                        f"[guard] execute failed ({action}): {err_s} — "
-                        f"will retry next poll (STF/slippage widens automatically)",
-                        flush=True,
+                    out.print(
+                        f"[bold red]EXEC FAIL[/] {_guard_action_markup(action)} "
+                        f"{err_s} [dim]— retry next poll (STF/slippage widens)[/]",
                     )
                     state["pending_action"] = action
                     state["last_execute_error"] = err_s
@@ -519,10 +995,18 @@ def run_guard_sync(cfg: GuardConfig) -> None:
                     state["pending_action"] = None
                     state["last_execute_error"] = None
                     state["pending_fail_count"] = 0
-                    print(f"[guard] executed {result}", flush=True)
+                    out.print(f"[bold green]DONE[/] {result}")
+                    _after_guard_fill(
+                        cfg=cfg,
+                        pool=pool,
+                        state=state,
+                        action=action,
+                        result=result,
+                        price=price,
+                        rpc_url=rpc_url,
+                        private_key=private_key,
+                    )
             state["last_price_usd"] = price
-            state["last_epoch"] = epoch
-            state["bds_project"] = project_id
             state["updated_at"] = utc_now_iso()
             save_guard_state(state, cfg.profile)
 
@@ -532,25 +1016,34 @@ def run_guard_sync(cfg: GuardConfig) -> None:
 
 
 def show_guard_status(profile: str | None = None) -> None:
+    out = make_tty_console()
     prof = profile or resolve_profile_name() or "(none)"
     state = load_guard_state(profile)
-    print(f"profile {prof}")
+    out.print(f"[bold blue]GUARD STATUS[/] profile [cyan]{prof}[/]")
     for key in (
         "pool_address",
         "pool_label",
         "base_token",
+        "pricing_mode",
+        "reference_entry_usd",
+        "last_exit_usd",
+        "take_profit_pct",
+        "stop_loss_pct",
+        "reentry_retrace_pct",
         "threshold_high",
         "threshold_low",
         "position",
         "last_price_usd",
-        "last_epoch",
-        "bds_project",
         "last_action",
+        "reserve_since",
+        "reserve_max_minutes",
+        "guard_exit_reason",
         "updated_at",
     ):
-        print(f"  {key}: {state.get(key)}")
+        val = state.get(key)
+        out.print(f"  [dim]{key}=[/]{val}")
     if not state.get("pool_address"):
-        print(
-            "  hint: run guard once with --pool <0x…> and --token <base> (optional) "
-            "to pin the watched pool",
+        out.print(
+            "  [dim italic]hint: run guard once with --pool <0x…> and --token "
+            "<base> (optional) to pin the watched pool[/]",
         )

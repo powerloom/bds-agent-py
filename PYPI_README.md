@@ -49,12 +49,13 @@ bds-agent create "alert me on Slack when any ETH/USDC swap exceeds $50k"
 # Start the MCP server (stdio) for AI framework integration
 bds-agent mcp
 
-# Threshold Guard: enter with USDC, then poll brackets (ETH mainnet example)
+# Threshold Guard: spot %% TP/SL, dip re-entry, optional idle exit (ETH mainnet example)
 bds-agent trade setup-evm --profile myguard
 bds-agent guard run --profile myguard \
   --pool 0xE0554a476A092703abdB3Ef35c80e0D76d32939F \
   --token 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 \
-  --enter --size 25 --threshold-high 2010 --threshold-low 2007 --poll 15
+  --size 5 --take-profit-pct 0.003 --stop-loss-pct 0.002 \
+  --reserve-max-minutes 30 --poll 5
 ```
 
 ## Available Commands

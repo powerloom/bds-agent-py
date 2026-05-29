@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from bds_agent.usd_prices import (
     _parse_price_scalar,
     _price_from_map,
-    base_snapshot_project_id,
-    fetch_last_finalized_epoch,
     fetch_token_usd_in_pool,
 )
 
@@ -21,15 +21,6 @@ def test_price_from_map_case_insensitive() -> None:
 
 def test_price_from_map_missing() -> None:
     assert _price_from_map({"0xabc": 1.0}, "0xdef") is None
-
-
-def test_base_snapshot_project_id() -> None:
-    pid = base_snapshot_project_id(
-        "0xE0554a476A092703abdB3Ef35c80e0D76d32939F",
-        "BDS_MAINNET_UNISWAPV3",
-    )
-    assert pid.startswith("baseSnapshot:0xE055")
-    assert pid.endswith(":BDS_MAINNET_UNISWAPV3")
 
 
 def test_parse_price_scalar_float() -> None:
@@ -61,6 +52,7 @@ def test_fetch_token_usd_in_pool(monkeypatch) -> None:
         def get(self, url, headers=None):
             assert "/mpp/token/price/0xC02a" in url
             assert "0xE055" in url
+            assert headers and headers.get("Authorization", "").startswith("Bearer ")
             return FakeResp()
 
     monkeypatch.setattr("bds_agent.usd_prices.httpx.Client", FakeClient)
@@ -73,15 +65,10 @@ def test_fetch_token_usd_in_pool(monkeypatch) -> None:
     assert price == 2003.2998465631588
 
 
-def test_fetch_last_finalized_epoch(monkeypatch) -> None:
+def test_fetch_token_usd_in_pool_auth_error_raises(monkeypatch) -> None:
     class FakeResp:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {"epochId": 25195000, "blocknumber": 25195000}
+        status_code = 401
+        text = "Unauthorized"
 
     class FakeClient:
         def __init__(self, *args, **kwargs) -> None:
@@ -94,13 +81,13 @@ def test_fetch_last_finalized_epoch(monkeypatch) -> None:
             return None
 
         def get(self, url, headers=None):
-            assert "last_finalized_epoch" in url
             return FakeResp()
 
     monkeypatch.setattr("bds_agent.usd_prices.httpx.Client", FakeClient)
-    epoch = fetch_last_finalized_epoch(
-        "https://bds.example",
-        "sk",
-        "baseSnapshot:0xpool:BDS_MAINNET_UNISWAPV3",
-    )
-    assert epoch == 25195000
+    with pytest.raises(RuntimeError, match="HTTP 401"):
+        fetch_token_usd_in_pool(
+            "https://bds.example/api",
+            "bad-key",
+            "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+            "0xE0554a476A092703abdB3Ef35c80e0D76d32939F",
+        )

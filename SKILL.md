@@ -30,7 +30,7 @@ metadata:
 
 # bds-agent (Powerloom BDS CLI)
 
-> **Version:** 2026-05-28 · **Canonical human docs:** [docs/USER_GUIDE.md](https://github.com/powerloom/bds-agent-py/blob/main/docs/USER_GUIDE.md) (install, profiles, metering HTTP, MCP, LLM, **trade**, **guard**). Re-read that file after `git pull` or `uv tool install --force .`.
+> **Version:** 2026-05-29 · **Canonical human docs:** [docs/USER_GUIDE.md](https://github.com/powerloom/bds-agent-py/blob/main/docs/USER_GUIDE.md) (install, profiles, metering HTTP, MCP, LLM, **trade**, **guard**). Re-read that file after `git pull` or `uv tool install --force .`.
 
 This file is a **framework-neutral** index: any orchestrator, IDE, or autonomous agent can read it to learn how to drive the **bds-agent** CLI and the **public HTTP** surfaces it calls. It is not a substitute for `USER_GUIDE.md` (full tables, precedence, troubleshooting).
 
@@ -99,9 +99,9 @@ The metering service implements **bds-agenthub-billing-metering**. Authoritative
 | `bds-agent trade run` | Pulse trader: BDS SSE → confluence → Uniswap V3 multi-pool (USD price gate); see **TRADE.md** |
 | `bds-agent trade status` / `history` / `pnl` / `exit` | Trader position, log, P/L summary, manual close |
 | `bds-agent prices at` / `prices token` | Pool-scoped or all-pools USD spot (`/mpp/token/price/`, `/mpp/tokenPrices/all/`) |
-| `bds-agent guard run` | Threshold Guard: bracket trades on BDS USD prices (Uniswap V3); see **GUARD.md** |
-| `bds-agent guard enter` | One-shot USDC → base entry before polling |
-| `bds-agent guard status` | Guard position, pool, thresholds from `.guard.json` |
+| `bds-agent guard run` | Threshold Guard: spot %% TP/SL + dip re-entry on one pool; see **GUARD.md** |
+| `bds-agent guard enter` | One-shot USDC → base at BDS spot (no polling) |
+| `bds-agent guard status` | `.guard.json`: position, bands, `guard_exit_reason` |
 | `bds-agent run <agent.yaml>` | Stream/fetch BDS, rules, sinks; optional **`verify: true`** in YAML |
 | `bds-agent query "…"` | NL → catalog route + params; optional **`--execute`** to call BDS |
 | `bds-agent create "…"` | NL → `agent.yaml` (needs LLM) |
@@ -137,7 +137,7 @@ bds-agent trade run --profile pulse --multi-pool --price-source usd --size 25 --
 
 ## Threshold Guard (`bds-agent guard`)
 
-**Bracket guard-rail** on one USDC-quoted pool: poll **`GET /mpp/token/price/{token}/{pool}`**, sell base → USDC on take-profit/stop-loss, re-buy on dip/breakout. Complements Pulse (stream confluence) — set-and-forget bounds, not tape-driven entries.
+**Bracket guard-rail** on one USDC-quoted pool: poll **`GET /mpp/token/price/{token}/{pool}`**, edge-triggered sells (TP/SL) and dip re-entry. Complements **Pulse** (`trade run`) — one pool, %% bands, not stream confluence.
 
 **Bootstrap (same profile + `trade.env` as Pulse):**
 
@@ -145,20 +145,28 @@ bds-agent trade run --profile pulse --multi-pool --price-source usd --size 25 --
 bds-agent signup --profile myguard
 bds-agent trade setup-evm --profile myguard
 
-# USDC-only wallet: --enter buys base with --size USDC before polling
+# Spot mode (default): %% from entry; --enter on by default
 bds-agent guard run --profile myguard \
   --pool 0xE0554a476A092703abdB3Ef35c80e0D76d32939F \
   --token 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 \
-  --enter --size 25 \
-  --threshold-high 2010 --threshold-low 2007 \
-  --poll 15 --slippage 0.03
+  --size 5 --take-profit-pct 0.003 --stop-loss-pct 0.002 \
+  --reentry-retrace-pct 0.5 --reserve-max-minutes 30 --poll 5
 
-bds-agent guard status --profile myguard
+bds-agent guard status --profile myguard   # .guard.json
+bds-agent trade status --profile myguard   # mirrored LONG/FLAT + P/L
 ```
 
-**Flags:** `--pool` (persisted to `.guard.json`), `--token` (base leg for price API), **`--enter`** (USDC → base on start), `--threshold-high` / `--threshold-low` (USD per 1 base token), `--size` (USDC for entry + re-entry buys), `--dry-run`, `-v` / `--verbose`. After take-profit, default **dip-only** re-entry (`--reentry-on-breakout` is off).
+**Spot flags (defaults):** `--take-profit-pct 0.03`, `--reentry-retrace-pct 0.5`, optional `--stop-loss-pct`, **`--reserve-max-minutes`** (exit process in USDC if no dip re-entry — sets `guard_exit_reason=reserve_idle_timeout` for orchestrators). **`--enter`** / **`--no-enter`**, `--size`, `--poll`, `--slippage`, `--pool`, `--token`, `--dry-run`, `-v`.
 
-**Approve + swap** are sequential txs; wait for pending mempool txs before retrying after Ctrl+C. Full reference: [docs/GUARD.md](https://github.com/powerloom/bds-agent-py/blob/main/docs/GUARD.md). Recipe spec (Powerloom): `ai-coord-docs/recipes/THRESHOLD_GUARD.md` on GitHub **powerloom/ai-coord-docs**.
+**Explicit mode:** both `--threshold-high` and `--threshold-low` (USD per 1 base token); optional `--reentry-on-breakout` (explicit only today).
+
+**Behavior:** Actions fire on **crosses** between polls (`prev → current`), not every tick inside a band. After TP you are **`reserve`** (USDC); re-buy on cross **down** through `reentry_below`. Price only going up → `hold` until dip or idle timeout.
+
+**Trade sync:** Each guard fill appends to **`profiles/<n>.trades.jsonl`** and updates **`trader.json`** — same profile as **`trade status`** / **`pnl`**.
+
+**Logs:** UTC timestamp + Rich colors (`GUARD` / `EXEC` / `DONE` lines). `NO_COLOR=1` disables color.
+
+**Approve + swap** are sequential txs; pending mempool is waited on before `--enter`. Full reference: [docs/GUARD.md](https://github.com/powerloom/bds-agent-py/blob/main/docs/GUARD.md).
 
 ## Environment and profiles (short)
 

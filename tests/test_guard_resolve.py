@@ -9,6 +9,8 @@ import pytest
 
 from bds_agent.guard import (
     GuardConfig,
+    _prepare_guard_pool,
+    _resolve_guard_evm,
     _resolve_watched_pool,
     resolve_guard_base_token,
     resolve_guard_pool_address,
@@ -127,3 +129,47 @@ def test_resolve_guard_base_token_mismatch() -> None:
     )
     with pytest.raises(RuntimeError, match="does not match"):
         resolve_guard_base_token(cfg, wp)
+
+
+def test_prepare_guard_pool_base_token_after_enrich(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
+    from bds_agent.active_markets import WatchedPool
+
+    stale = WatchedPool(
+        address="0xE0554a476A092703abdB3Ef35c80e0D76d32939F",
+        token0="0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        token1="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        base_idx=0,
+        label="stale",
+        fee=100,
+        base_decimals=18,
+    )
+    enriched = replace(
+        stale,
+        token0="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        token1="0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        base_idx=1,
+    )
+
+    monkeypatch.setattr("bds_agent.guard._resolve_watched_pool", lambda *_a, **_k: stale)
+    monkeypatch.setattr(
+        "bds_agent.evm_swap.enrich_watched_pool_fee",
+        lambda *_a, **_k: enriched,
+    )
+
+    cfg = GuardConfig(threshold_high=1.0, threshold_low=0.5)
+    pool, base = _prepare_guard_pool(cfg, default_guard_state(), rpc_url="http://127.0.0.1:8545")
+    assert pool.base_idx == 1
+    assert base.lower() == enriched.base_token.lower()
+
+
+def test_resolve_guard_evm_dry_run_no_private_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bds_agent.trade_config.load_trade_env_file", lambda: None)
+    monkeypatch.delenv("TRADE_EVM_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("TRADE_EVM_RPC_URL", raising=False)
+    cfg = GuardConfig(threshold_high=1.0, threshold_low=0.5, dry_run=True)
+    pk, rpc, chain_id = _resolve_guard_evm(cfg)
+    assert pk is None
+    assert rpc is None
+    assert chain_id == 1

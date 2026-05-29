@@ -2051,10 +2051,33 @@ def guard_run_cmd(
         help="Base token address (non-USDC leg). Pins GET /mpp/token/price/{token}/{pool}; "
         "validated against pool metadata.",
     ),
-    threshold_high: float = typer.Option(..., "--threshold-high", help="Upper bound (USD)."),
-    threshold_low: float = typer.Option(..., "--threshold-low", help="Lower bound (USD)."),
+    take_profit_pct: Optional[float] = typer.Option(
+        None,
+        "--take-profit-pct",
+        help="Spot mode (default): sell after price rises this fraction above entry (0.03 = +3%%).",
+    ),
+    stop_loss_pct: Optional[float] = typer.Option(
+        None,
+        "--stop-loss-pct",
+        help="Spot mode: sell when price falls this fraction below entry (0.02 = -2%%). Omit for no stop.",
+    ),
+    reentry_retrace_pct: float = typer.Option(
+        0.5,
+        "--reentry-retrace-pct",
+        help="Spot mode: after exit, re-buy after partial giveback (gain) or recovery (loss).",
+    ),
+    threshold_high: Optional[float] = typer.Option(
+        None,
+        "--threshold-high",
+        help="Explicit mode: upper USD band (requires --threshold-low).",
+    ),
+    threshold_low: Optional[float] = typer.Option(
+        None,
+        "--threshold-low",
+        help="Explicit mode: lower USD band (requires --threshold-high).",
+    ),
     poll: float = typer.Option(15.0, "--poll", help="Poll interval in seconds."),
-    size: float = typer.Option(25.0, "--size", help="USDC size for re-entry buys."),
+    size: float = typer.Option(25.0, "--size", help="USDC notional per buy (--enter / re-entry)."),
     slippage: float = typer.Option(0.005, "--slippage", help="Max slippage."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Detect crosses without swapping."),
     verbose: bool = typer.Option(
@@ -2064,23 +2087,31 @@ def guard_run_cmd(
         help="Include full pool address on every tick line (always shown on startup).",
     ),
     enter: bool = typer.Option(
-        False,
-        "--enter",
-        help="On start: swap USDC → base token using --size if wallet holds negligible base.",
+        True,
+        "--enter/--no-enter",
+        help="Buy base at current BDS spot on start (default on). --no-enter if already holding.",
     ),
     reentry_on_breakout: bool = typer.Option(
         False,
         "--reentry-on-breakout",
-        help="When in USDC (reserve), also buy if price >= --threshold-high. Default: re-enter on dip only.",
+        help="Explicit mode only: re-enter on breakout above --threshold-high.",
     ),
     max_ticks: int = typer.Option(
         0,
         "--max-ticks",
         help="Exit after N polls (0 = run until interrupted).",
     ),
+    reserve_max_minutes: float = typer.Option(
+        0.0,
+        "--reserve-max-minutes",
+        help=(
+            "After take-profit/stop, exit guard if still in USDC with no dip "
+            "re-entry for N minutes (0 = wait forever). For composed agents."
+        ),
+    ),
     profile: ProfileCliOption = None,
 ) -> None:
-    """Poll BDS USD prices and execute bracket trades on threshold crosses."""
+    """Poll BDS spot USD and bracket trade (spot %% bands by default, or explicit USD thresholds)."""
     _apply_profile_option(profile)
     from bds_agent.guard import GuardConfig, run_guard_sync
 
@@ -2089,6 +2120,9 @@ def guard_run_cmd(
         base_token=token,
         threshold_high=threshold_high,
         threshold_low=threshold_low,
+        take_profit_pct=take_profit_pct,
+        stop_loss_pct=stop_loss_pct,
+        reentry_retrace_pct=reentry_retrace_pct,
         poll_seconds=poll,
         size_usd=size,
         slippage=slippage,
@@ -2098,6 +2132,7 @@ def guard_run_cmd(
         verbose=verbose,
         enter=enter,
         reentry_on_breakout=reentry_on_breakout,
+        reserve_max_minutes=reserve_max_minutes,
     )
     try:
         run_guard_sync(cfg)
@@ -2122,58 +2157,57 @@ def guard_enter_cmd(
     ),
     size: float = typer.Option(25.0, "--size", help="USDC notional for the entry buy."),
     slippage: float = typer.Option(0.005, "--slippage", help="Max slippage."),
+    take_profit_pct: Optional[float] = typer.Option(
+        None,
+        "--take-profit-pct",
+        help="Recorded for follow-up guard run (default 0.03).",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Log intent without swapping."),
     profile: ProfileCliOption = None,
 ) -> None:
-    """One-shot USDC → base entry (same as ``guard run --enter`` without polling)."""
+    """One-shot USDC → base at BDS spot (same as ``guard run --enter`` without polling)."""
     _apply_profile_option(profile)
     from bds_agent.guard import (
         GuardConfig,
         Position,
-        _bds_namespace,
-        _bds_price_context,
-        _resolve_watched_pool,
+        _fetch_guard_price_usd,
+        _prepare_guard_pool,
+        _record_spot_reference,
+        _resolve_guard_evm,
         _sync_guard_config_state,
-        resolve_guard_base_token,
+        normalize_guard_config,
         run_initial_entry_if_needed,
         utc_now_iso,
     )
     from bds_agent.guard_state import load_guard_state, save_guard_state
-    from bds_agent.trade_config import resolve_trade_wallet
-    from bds_agent.usd_prices import base_snapshot_project_id
 
-    cfg = GuardConfig(
-        pool=pool,
-        base_token=token,
-        threshold_high=0.0,
-        threshold_low=0.0,
-        size_usd=size,
-        slippage=slippage,
-        dry_run=dry_run,
-        profile=profile,
-        enter=True,
+    cfg = normalize_guard_config(
+        GuardConfig(
+            pool=pool,
+            base_token=token,
+            size_usd=size,
+            slippage=slippage,
+            dry_run=dry_run,
+            profile=profile,
+            enter=True,
+            take_profit_pct=take_profit_pct,
+        ),
     )
     state = load_guard_state(profile)
-    pool_wp = _resolve_watched_pool(cfg, state)
-    base_token = resolve_guard_base_token(cfg, pool_wp)
-    private_key, rpc_url, chain_id = resolve_trade_wallet()
-    from bds_agent.evm_swap import enrich_watched_pool_fee
-
-    pool_wp = enrich_watched_pool_fee(rpc_url, pool_wp)
-    project_id = base_snapshot_project_id(pool_wp.address, _bds_namespace(cfg))
+    private_key, rpc_url, chain_id = _resolve_guard_evm(cfg)
+    pool_wp, base_token = _prepare_guard_pool(cfg, state, rpc_url=rpc_url)
     _sync_guard_config_state(
         state,
         pool=pool_wp,
         base_token=base_token,
         cfg=cfg,
-        project_id=project_id,
     )
     position: Position = (
         state.get("position")
         if state.get("position") in ("token", "reserve")
         else "token"
     )
-    price, epoch, _ = _bds_price_context(cfg, pool_wp, base_token=base_token)
+    price = _fetch_guard_price_usd(cfg, pool_wp, base_token=base_token)
     try:
         new_pos, result = run_initial_entry_if_needed(
             cfg,
@@ -2190,7 +2224,8 @@ def guard_enter_cmd(
     state["position"] = new_pos
     state["last_action"] = result
     state["last_price_usd"] = price
-    state["last_epoch"] = epoch
+    if price and price > 0 and not (result or {}).get("skipped"):
+        _record_spot_reference(state, action="initial_entry_buy", price=price)
     state["updated_at"] = utc_now_iso()
     save_guard_state(state, profile)
     typer.echo(f"enter {result}")

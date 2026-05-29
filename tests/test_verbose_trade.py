@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from bds_agent.exit_strategies import ExitCheck
 from bds_agent.trade import (
-    TimestampedConsole,
     _format_exit_check,
     _format_price_px,
     _gate_markup,
@@ -13,6 +12,7 @@ from bds_agent.trade import (
     _verbose_short_ignore_reason,
     _verbose_show_exit_checks,
 )
+from bds_agent.tty_console import TimestampedConsole
 from rich.console import Console
 
 

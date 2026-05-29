@@ -23,11 +23,13 @@ def test_amount_out_min_attempts_relax_to_zero() -> None:
     assert attempts[-1] == 0
 
 
-def test_is_swap_retryable_stf_only() -> None:
+def test_is_swap_retryable_slippage_only() -> None:
     from web3.exceptions import ContractLogicError
 
-    exc = ContractLogicError("execution reverted: STF")
-    assert _is_swap_retryable(exc) is True
+    slippage = ContractLogicError("execution reverted: Too little received")
+    assert _is_swap_retryable(slippage) is True
+    stf = ContractLogicError("execution reverted: STF")
+    assert _is_swap_retryable(stf) is False
     assert _is_swap_retryable(RuntimeError("execution reverted: transfer amount exceeds balance")) is False
 
 
@@ -37,13 +39,19 @@ def test_slippage_attempts_widen() -> None:
     assert tiers[-1] >= 0.03
 
 
-def test_position_sell_tokens_sweeps_full_wallet() -> None:
+def test_position_sell_tokens_uses_recorded_balance() -> None:
     pos = {
         "token_balance": 86.0,
         "entry_price": 0.174,
         "size_usd": 15.0,
     }
     cfg = type("C", (), {"size_usd": 15.0})()
-    assert _position_sell_tokens(pos, cfg, 200.0) == 200.0
+    assert _position_sell_tokens(pos, cfg, 200.0) == 86.0
     assert _position_sell_tokens(pos, cfg, 50.0) == 50.0
     assert _position_sell_tokens(pos, cfg, 0.0) == 0.0
+
+
+def test_position_sell_tokens_legacy_falls_back_to_wallet() -> None:
+    pos = {"entry_price": 0.174, "size_usd": 15.0}
+    cfg = type("C", (), {"size_usd": 15.0})()
+    assert _position_sell_tokens(pos, cfg, 12.5) == 12.5

@@ -104,12 +104,19 @@ def fetch_token_usd_in_pool(
     try:
         with httpx.Client(timeout=timeout) as client:
             resp = client.get(url, headers=_headers(api_key))
-            if resp.status_code in (404, 402):
-                return None
-            resp.raise_for_status()
-            body = resp.json()
-    except (httpx.HTTPError, ValueError):
+    except httpx.RequestError as exc:
+        raise RuntimeError(f"BDS price request failed for {url}: {exc}") from exc
+    if resp.status_code in (404, 402):
         return None
+    if resp.status_code >= 400:
+        detail = (resp.text or "")[:300]
+        raise RuntimeError(
+            f"BDS price HTTP {resp.status_code} for {url}: {detail}",
+        )
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"BDS price response is not JSON for {url}") from exc
     return _parse_price_scalar(body)
 
 
@@ -148,55 +155,22 @@ def fetch_all_token_prices(
     try:
         with httpx.Client(timeout=timeout) as client:
             resp = client.get(url, headers=_headers(api_key))
-            if resp.status_code == 404:
-                return {}
-            resp.raise_for_status()
-            body = resp.json()
-    except (httpx.HTTPError, ValueError):
+    except httpx.RequestError as exc:
+        raise RuntimeError(f"BDS tokenPrices request failed for {url}: {exc}") from exc
+    if resp.status_code == 404:
         return {}
+    if resp.status_code >= 400:
+        detail = (resp.text or "")[:300]
+        raise RuntimeError(
+            f"BDS tokenPrices HTTP {resp.status_code} for {url}: {detail}",
+        )
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"BDS tokenPrices response is not JSON for {url}") from exc
     if not isinstance(body, dict):
         return {}
     return _parse_price_map(body)
-
-
-def base_snapshot_project_id(pool_address: str, namespace: str) -> str:
-    """Project id for per-pool USD maps (matches snapshotter-computes ``baseSnapshot:`` tasks)."""
-    pool = Web3.to_checksum_address(pool_address)
-    return f"baseSnapshot:{pool}:{namespace.strip()}"
-
-
-def fetch_last_finalized_epoch(
-    base_url: str,
-    api_key: str,
-    project_id: str,
-    *,
-    timeout: float = 30.0,
-) -> int | None:
-    """
-    GET /last_finalized_epoch/{project_id} — VPA-finalized epoch for a snapshot project.
-
-    Same consumption API as pooler / core_api (mounted on the BDS snapshotter origin).
-    """
-    from urllib.parse import quote
-
-    pid = quote(project_id, safe="")
-    url = f"{base_url.rstrip('/')}/last_finalized_epoch/{pid}"
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.get(url, headers=_headers(api_key))
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-            body = resp.json()
-    except (httpx.HTTPError, ValueError):
-        return None
-    if not isinstance(body, dict):
-        return None
-    try:
-        epoch = int(body.get("epochId") or 0)
-    except (TypeError, ValueError):
-        return None
-    return epoch if epoch > 0 else None
 
 
 def _price_from_map(body: dict[str, Any], pool_key: str) -> float | None:

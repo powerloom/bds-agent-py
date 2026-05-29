@@ -16,7 +16,7 @@ Python package and CLI for building agents on **Powerloom BDS** data markets.
 
 **→ [docs/TRADE.md](docs/TRADE.md)** — Pulse trader (`bds-agent trade`).
 
-**→ [docs/GUARD.md](docs/GUARD.md)** — Threshold Guard bracket trading (`bds-agent guard`: `--enter`, pool/token, BDS USD prices).
+**→ [docs/GUARD.md](docs/GUARD.md)** — Threshold Guard (`bds-agent guard`: spot %% TP/SL, dip re-entry, `--reserve-max-minutes`, trade log sync).
 
 **→ [docs/PRICES.md](docs/PRICES.md)** — USD Price Feed CLI (`bds-agent prices`).
 
@@ -96,8 +96,8 @@ If you still have a single **`~/.config/bds-agent/tempo.env`**, move it to **`pr
 | `bds-agent trade setup-evm` | Save trading wallet to `profiles/<n>.trade.env` (swaps only) |
 | `bds-agent trade run` | Pulse trader: BDS stream → Uniswap V3 multi-pool (USD price gate); see `docs/TRADE.md` |
 | `bds-agent prices at` / `prices token` | USD spot per pool or all pools (`/mpp/token/price/`, `/mpp/tokenPrices/all/`) |
-| `bds-agent guard run` | Threshold Guard: bracket trades on BDS USD prices; `--enter` for USDC → base; see `docs/GUARD.md` |
-| `bds-agent guard enter` / `guard status` | One-shot entry or view `.guard.json` state |
+| `bds-agent guard run` | Threshold Guard: spot %% bands or explicit USD thresholds; see `docs/GUARD.md` |
+| `bds-agent guard enter` / `guard status` | One-shot USDC → base; `.guard.json` + `guard_exit_reason` |
 | `bds-agent query "…"` | NL → endpoint + params (LLM); optional **`--execute`** to call BDS — see **`docs/USER_GUIDE.md`** |
 | `bds-agent create "…"` | NL → **`agent.yaml`** (LLM + validation); **`--output`** / **`-o`** optional — see **`docs/USER_GUIDE.md`** |
 | `bds-agent llm status` / `setup` / `ping` | Configure and test LLM backends (`~/.config/bds-agent/llm.json`) |

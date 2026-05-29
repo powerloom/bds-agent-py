@@ -18,6 +18,11 @@ from eth_abi import decode, encode
 from eth_utils import keccak, to_checksum_address
 
 from bds_agent.config import AgentConfig
+from bds_agent.defaults import (
+    DEFAULT_POWERLOOM_DATA_MARKET,
+    DEFAULT_POWERLOOM_PROTOCOL_STATE,
+    DEFAULT_POWERLOOM_RPC_URL,
+)
 from bds_agent.profile_env import env_or_profile
 
 _MAX_SNAPSHOTS_CID_SELECTOR = keccak(text="maxSnapshotsCid(address,string,uint256)")[:4]
@@ -107,11 +112,15 @@ def resolve_verify_rpc_url(cfg: AgentConfig) -> str | None:
     if env:
         return env
     v = env_or_profile("POWERLOOM_RPC_URL")
-    return v if v else None
+    return v if v else DEFAULT_POWERLOOM_RPC_URL
 
 
-def resolve_verify_protocol_state(cfg: AgentConfig, payload: VerificationPayload) -> str | None:
-    """Precedence: ``agent.yaml`` ``verify_protocol_state`` → ``POWERLOOM_PROTOCOL_STATE`` env/profile → payload."""
+def resolve_verify_protocol_state(cfg: AgentConfig, payload: VerificationPayload) -> str:
+    """
+    Precedence: ``agent.yaml`` → env/profile → stream payload → packaged BDS alpha defaults.
+
+    Guard/trade/prices do not use this; only ``bds-agent run`` with ``verify: true``.
+    """
     if cfg.verify_protocol_state and str(cfg.verify_protocol_state).strip():
         return str(cfg.verify_protocol_state).strip()
     env = os.environ.get("POWERLOOM_PROTOCOL_STATE", "").strip()
@@ -121,11 +130,11 @@ def resolve_verify_protocol_state(cfg: AgentConfig, payload: VerificationPayload
     if v:
         return v
     ps = (payload.protocol_state or "").strip()
-    return ps if ps else None
+    return ps if ps else DEFAULT_POWERLOOM_PROTOCOL_STATE
 
 
-def resolve_verify_data_market(cfg: AgentConfig, payload: VerificationPayload) -> str | None:
-    """Precedence: ``agent.yaml`` ``verify_data_market`` → ``POWERLOOM_DATA_MARKET`` env/profile → payload."""
+def resolve_verify_data_market(cfg: AgentConfig, payload: VerificationPayload) -> str:
+    """Precedence: ``agent.yaml`` → env/profile → stream payload → packaged BDS alpha defaults."""
     if cfg.verify_data_market and str(cfg.verify_data_market).strip():
         return str(cfg.verify_data_market).strip()
     env = os.environ.get("POWERLOOM_DATA_MARKET", "").strip()
@@ -135,7 +144,7 @@ def resolve_verify_data_market(cfg: AgentConfig, payload: VerificationPayload) -
     if v:
         return v
     dm = (payload.data_market or "").strip()
-    return dm if dm else None
+    return dm if dm else DEFAULT_POWERLOOM_DATA_MARKET
 
 
 async def verify_cid(

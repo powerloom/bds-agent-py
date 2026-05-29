@@ -1,17 +1,45 @@
 # Threshold Guard — `bds-agent guard`
 
-Bracket trades on **one** USDC-quoted pool. Price source: `GET /mpp/token/price/{token}/{pool}` (pool + base token are both required by the API).
+Bracket trades on **one** USDC-quoted pool. Price source: `GET /mpp/token/price/{token}/{pool}` (BDS spot USD per base token). Uses the same profile API key and **`profiles/<name>.trade.env`** swap wallet as **`bds-agent trade`**.
 
-## Enter the position (USDC → base)
+## Commands
 
-The guard rail monitors **base token** exposure (e.g. WETH) and sells to USDC on threshold crosses. If your wallet is **USDC-only**, use **`--enter`** so the agent buys the base token before polling:
+| Command | Purpose |
+|---------|---------|
+| `bds-agent guard run` | Poll BDS spot, edge-trigger bracket trades (default **spot** %% bands) |
+| `bds-agent guard enter` | One-shot USDC → base at spot (same as `guard run --enter` without polling) |
+| `bds-agent guard status` | Read `.guard.json` (position, bands, `guard_exit_reason`, …) |
 
-| Flag | Role |
-|------|------|
-| **`--enter`** | On start: `swap_usdc_to_token` for **`--size`** USDC if base balance is negligible |
-| **`--size`** | USDC notional for entry buy (and for re-entry after a sell) |
+After each on-chain fill, guard mirrors **ENTRY** / **EXIT** into **`trader.json`** and the trades log for the same profile — use **`bds-agent trade status`**, **`history`**, **`pnl`** alongside **`guard status`**.
 
-One-shot entry without polling:
+## Spot mode (default)
+
+No finance jargon required: you buy at **whatever the feed says now**, sell after a **percent gain**, and only buy back after the market **gives back part of that gain**.
+
+| Flag | Default | Role |
+|------|---------|------|
+| **`--enter`** | on | Swap **`--size`** USDC → base at current BDS spot (`--no-enter` if you already hold) |
+| **`--take-profit-pct`** | `0.03` | Exit when price rises **+3%** above the entry spot (e.g. `0.05` = +5%) |
+| **`--stop-loss-pct`** | *(off)* | Optional: exit when price falls **−X%** below entry (e.g. `0.02` = −2%) |
+| **`--reentry-retrace-pct`** | `0.5` | After exit, re-enter on cross **down**: after a **win**, give back half the gain; after a **stop**, dip half the loss **below** the exit (cheaper buy) |
+| **`--reserve-max-minutes`** | `0` | In USDC after an exit, stop guard if no dip re-entry within **N** minutes (`0` = poll forever). Sets `guard_exit_reason=reserve_idle_timeout` in `.guard.json` for orchestrators |
+
+**Take-profit example:** entry **$2000**, +3% → sell near **$2060**. Retrace **0.5** → re-buy on cross down through **$2030** (half the $60 gain given back).
+
+**Stop-loss example:** entry **$2000**, `--stop-loss-pct 0.02` → sell near **$1960**. Retrace **0.5** → re-buy on cross down through **$1940** (another $20 below the stop — not a bounce toward $2000).
+
+```bash
+bds-agent trade setup-evm --profile bds-tgtest2
+bds-agent guard run --profile bds-tgtest2 \
+  --pool 0xE0554a476A092703abdB3Ef35c80e0D76d32939F \
+  --token 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 \
+  --size 5 --take-profit-pct 0.003 --stop-loss-pct 0.002 \
+  --reentry-retrace-pct 0.5 --reserve-max-minutes 30 --poll 5
+```
+
+(`--enter` is on by default; add `--no-enter` if you already hold base.)
+
+One-shot entry at spot:
 
 ```bash
 bds-agent guard enter --profile bds-tgtest2 \
@@ -20,78 +48,78 @@ bds-agent guard enter --profile bds-tgtest2 \
   --size 5
 ```
 
-Default state assumes **`position=token`** (you are “in” the base leg). Without `--enter`, you must already hold the base token from a prior buy.
+**Edge-triggered:** actions fire on **crosses** between polls (`prev → current`), not every tick while price sits inside a band.
 
-**After take-profit** (`position=reserve`): default is **hold USDC** until price **crosses down** through `--threshold-low` (dip re-entry). You will **not** immediately buy back while price is still above `--threshold-high`. Use `--reentry-on-breakout` only if you explicitly want breakout re-entry.
+## Explicit mode (compose)
 
-**Edge-triggered (not level):** actions fire only when price **crosses** a band between polls (`prev → current`), not every tick while price sits inside a band. That prevents sell→buy→sell churn. First tick after start never trades (no `prev_price` yet). **`--threshold-high` must be > `--threshold-low`** (e.g. high=2012, low=2007 for WETH).
-
-## Pool + token (price feed)
-
-| Flag | Required | Role |
-|------|----------|------|
-| `--pool` | First run (then optional) | Uniswap V3 pool; persisted to `.guard.json` |
-| `--token` | Optional | Base token for `GET /mpp/token/price/{token}/{pool}` |
-| `--threshold-high` / `--threshold-low` | Yes | USD per **1 base token** (e.g. WETH ~2000) |
-
-## Commands
+Pass **both** USD thresholds when you want fixed levels instead of %% from entry:
 
 ```bash
-# Enter with USDC, then run bracket guard (live)
 bds-agent guard run --profile bds-tgtest2 \
   --pool 0xE0554a476A092703abdB3Ef35c80e0D76d32939F \
   --token 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 \
-  --enter --size 5 \
   --threshold-high 2010 --threshold-low 2001 \
-  --poll 5 --slippage 0.03 --dry-run
-
-# Later runs — pool (and base_token) restored from .guard.json
-bds-agent guard run --profile bds-tgtest2 \
-  --threshold-high 2010 --threshold-low 2001 --poll 5
-
-# Inspect persisted pool + position
-bds-agent guard status --profile bds-tgtest2
-
-# Verbose ticks (pool address on every line; startup always prints pool_addr + base_token)
-bds-agent guard run --profile bds-tgtest2 --pool 0xE055... --token 0xC02a... \
-  --threshold-high 2010 --threshold-low 2001 -v
+  --no-enter --poll 5
 ```
 
-Startup line (situation #4 fix — address visible, not label-only):
+| Position | Cross | Action |
+|----------|-------|--------|
+| **token** | up through `--threshold-high` | take-profit sell |
+| **token** | down through `--threshold-low` | stop-loss sell |
+| **reserve** | down through `--threshold-low` | dip re-entry |
+| **reserve** | up through `--threshold-high` | breakout re-entry (only with `--reentry-on-breakout`) |
 
-```text
-guard pool=USDC/WETH pool_addr=0xE0554a476A092703abdB3Ef35c80e0D76d32939F base_token=0xC02a... ...
-[guard] tick=1 pool=USDC/WETH 0xE0554a476A092703abdB3Ef35c80e0D76d32939F base_token=0xC02a... bds_epoch=... price=$...
-```
+## Pool + token
+
+| Flag | Required | Role |
+|------|----------|------|
+| `--pool` | First run | Uniswap V3 pool; persisted to `.guard.json` |
+| `--token` | Optional | Base token for the price route |
 
 ## State file
 
 `~/.config/bds-agent/profiles/<profile>.guard.json`:
 
-- `pool_address`, `pool_label`, `base_token` — watched market
-- `threshold_high`, `threshold_low` — last run bounds
-- `position` — `token` | `reserve`
-- `last_price_usd`, `last_epoch`, `bds_project`, `last_action`
+- `pricing_mode` — `spot` | `explicit`
+- `position` — `token` (long base) | `reserve` (USDC after exit)
+- `reference_entry_usd`, `last_exit_usd` — spot anchors for %% bands
+- `reserve_since`, `reserve_max_minutes` — idle timer after exit (orchestration)
+- `guard_exit_reason` — e.g. `reserve_idle_timeout` when `--reserve-max-minutes` fired
+- `take_profit_pct`, `stop_loss_pct`, `reentry_retrace_pct` — last run settings
+- `pool_address`, `base_token`, `last_price_usd`, `last_action`, `pending_action`
 
-## STF / slippage failures
+Guard does **not** call `last_finalized_epoch` or pass ProtocolState addresses — the resolver serves spot prices. On-chain verification uses **`bds-agent run`** + **`verify: true`** only (`bds-agent config init` alpha defaults).
 
-Uniswap **STF** (`amountOutMinimum` too tight vs pool) is retried with wider slippage and relaxed `amountOutMinimum` → 0. Pool **fee tier** and token order come from on-chain `pool.fee()` / `token0` / `token1` (not BDS metadata alone). Insufficient USDC or stuck pending txs surface as explicit errors. If swaps still fail, guard **does not exit** — it sets `pending_action` and retries with **backoff** (not every 5s).
+Each executed guard fill (entry / take-profit / stop / re-entry) is mirrored into the **same profile’s** `trader.json` and trades log, so `bds-agent trade status`, `history`, and `pnl` stay in sync. Use `bds-agent guard status` for bracket-specific fields (`.guard.json`).
 
-Startup logs `pool_fee=` from on-chain `pool.fee()`. USDC/WETH `0xE055…` is the **0.01%** tier (**100**), not the main 0.05% pool (`0x88e6…`, fee **500**). Also check `wallet_usdc=` before `--enter`.
+### Composed / orchestrated runs
 
-## Stuck / pending transactions
+One guard cycle: **enter → bracket → exit to USDC → optional dip re-entry**.
 
-`--enter` sends **approve** then **swap** (two sequential txs). If you **Ctrl+C** mid-flight, a pending tx can block the next run with `replacement transaction underpriced`.
+If price only rips higher after take-profit, dip re-entry never fires and the process would poll forever. Set **`--reserve-max-minutes N`** so guard stops in USDC and sets **`guard_exit_reason=reserve_idle_timeout`**. Your outer agent can then start another leg (new `guard run`, `trade run`, different pool, etc.).
 
-The agent now:
+```bash
+# Parent loop (pseudo): run guard until idle exit or keyboard interrupt
+bds-agent guard run --profile myagent ... --reserve-max-minutes 45
+reason=$(jq -r .guard_exit_reason ~/.config/bds-agent/profiles/myagent.guard.json)
+# reason == reserve_idle_timeout → cycle complete; else crashed or Ctrl+C
+```
 
-- Uses **`pending`** nonce for approve → swap sequencing
-- **Waits** for pending txs to clear before a new approve/swap bundle (up to 5 min)
-- **Bumps fees** automatically on nonce conflicts
+| `guard_exit_reason` | Meaning |
+|---------------------|---------|
+| `reserve_idle_timeout` | No dip re-entry within `--reserve-max-minutes` |
+| *(unset)* | Still running, re-entered, or stopped manually |
 
-If it still fails, wait for pending txs in your wallet or speed them up, then retry.
+**Pulse vs guard:** [`TRADE.md`](TRADE.md) — stream confluence, multi-pool. Guard — one pool, %% brackets, poll-based. Same wallet files; different state files.
+
+## Logs
+
+Stdout uses the same **UTC timestamp + Rich colors** as `bds-agent trade` pulse mode (`[bold blue]GUARD[/]` ticks, green/red actions). Disable with `NO_COLOR=1`.
+
+## STF / slippage / pending txs
+
+See existing notes in this file (pool fee from chain, STF retry, `pending_action` backoff, pending mempool before `--enter`).
 
 ## Related
 
 - `bds-agent prices at <token> --pool <pool>` — probe the same price route
-- Recipe spec: Powerloom `ai-coord-docs/recipes/THRESHOLD_GUARD.md`
