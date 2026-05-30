@@ -139,8 +139,22 @@ def normalize_trader_state(state: dict[str, Any]) -> dict[str, Any]:
     return sync_legacy_top_level(state)
 
 
+def is_paper_position(pos: dict[str, Any]) -> bool:
+    return bool(pos.get("dry_run") or pos.get("entry_tx") == "dry-run")
+
+
 def is_dry_run_open(state: dict[str, Any]) -> bool:
-    return any(p.get("dry_run") or p.get("entry_tx") == "dry-run" for p in open_positions(state))
+    return any(is_paper_position(p) for p in open_positions(state))
+
+
+def strip_dry_run_positions(state: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Remove paper positions only; keep live LONGs. Returns (state, removed_count)."""
+    state = normalize_trader_state(state)
+    before = open_positions(state)
+    kept = [p for p in before if not is_paper_position(p)]
+    removed = len(before) - len(kept)
+    state["positions"] = kept
+    return sync_legacy_top_level(state), removed
 
 
 def exit_state_view(pos: dict[str, Any]) -> dict[str, Any]:

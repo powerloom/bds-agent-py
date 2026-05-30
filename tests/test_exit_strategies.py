@@ -127,3 +127,11 @@ def test_daily_loss_limit_sum() -> None:
         {"type": "EXIT", "pnl_usd": 10.0, "timestamp": "2026-05-19T14:00:00Z"},
     ]
     assert daily_realized_pnl_usd(trades, day="2026-05-20") == -55.0
+
+
+def test_daily_loss_excludes_dry_run_exits() -> None:
+    trades = [
+        {"type": "EXIT", "pnl_usd": -50.0, "dry_run": True, "timestamp": "2026-05-20T10:00:00Z"},
+        {"type": "EXIT", "pnl_usd": -5.0, "timestamp": "2026-05-20T12:00:00Z"},
+    ]
+    assert daily_realized_pnl_usd(trades, day="2026-05-20", exclude_dry_run=True) == -5.0

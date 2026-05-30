@@ -46,9 +46,11 @@ def is_dry_run_position(state: dict[str, Any]) -> bool:
 
 
 def reconcile_live_trader_state(state: dict[str, Any], *, live_mode: bool) -> dict[str, Any]:
-    """Drop paper positions when starting a live run; they must not block real entries."""
+    """Drop paper positions when starting a live run; keep live LONGs on-chain."""
     if live_mode and is_dry_run_position(state):
-        return default_trader_state()
+        from bds_agent.positions import strip_dry_run_positions
+
+        state, _ = strip_dry_run_positions(state)
     return state
 
 
@@ -70,10 +72,18 @@ def prepare_live_trader_state(
     """
     notes: list[str] = []
     if is_dry_run_position(state):
-        state = default_trader_state()
-        notes.append(
-            "Clearing dry-run position — paper LONG is not on-chain; starting live FLAT",
-        )
+        from bds_agent.positions import open_positions, strip_dry_run_positions
+
+        state, removed = strip_dry_run_positions(state)
+        live_left = len(open_positions(state))
+        if live_left > 0:
+            notes.append(
+                f"Removed {removed} dry-run position(s); kept {live_left} live LONG(s)",
+            )
+        else:
+            notes.append(
+                "Clearing dry-run position — paper LONG is not on-chain; starting live FLAT",
+            )
     elif (
         state.get("position") is None
         and is_reentry_blocked(state)
@@ -194,12 +204,15 @@ def daily_realized_pnl_usd(
     trades: list[dict[str, Any]],
     *,
     day: str | None = None,
+    exclude_dry_run: bool = False,
 ) -> float:
     """Sum EXIT pnl_usd for calendar day (UTC). Default: today."""
     target = day or datetime.now(UTC).strftime("%Y-%m-%d")
     total = 0.0
     for t in trades:
         if t.get("type") != "EXIT":
+            continue
+        if exclude_dry_run and t.get("dry_run"):
             continue
         d = _trade_day_utc(t.get("timestamp"))
         if d != target:

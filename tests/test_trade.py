@@ -189,6 +189,56 @@ def test_dry_run_position_detected_and_cleared_for_live() -> None:
     assert reconcile_live_trader_state(paper, live_mode=False) == paper
 
 
+def test_prepare_live_keeps_live_position_when_paper_also_open() -> None:
+    from bds_agent.positions import open_positions, strip_dry_run_positions
+    from bds_agent.trader_state import prepare_live_trader_state
+
+    live_pool = "0x1111111111111111111111111111111111111111"
+    paper_pool = "0x2222222222222222222222222222222222222222"
+
+    def _mixed_state() -> dict:
+        return {
+            "positions": [
+                {
+                    "entry_pool": live_pool,
+                    "entry_label": "LIVE",
+                    "entry_token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                    "entry_token0": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                    "entry_token1": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                    "entry_base_idx": 1,
+                    "entry_fee": 500,
+                    "entry_base_decimals": 18,
+                    "entry_price": 2000.0,
+                    "entry_tx": "0xlive",
+                    "dry_run": False,
+                },
+                {
+                    "entry_pool": paper_pool,
+                    "entry_label": "PAPER",
+                    "entry_token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                    "entry_token0": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                    "entry_token1": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                    "entry_base_idx": 1,
+                    "entry_fee": 500,
+                    "entry_base_decimals": 18,
+                    "entry_price": 2100.0,
+                    "entry_tx": "dry-run",
+                    "dry_run": True,
+                },
+            ],
+        }
+
+    stripped, removed = strip_dry_run_positions(_mixed_state())
+    assert removed == 1
+    assert len(open_positions(stripped)) == 1
+    assert stripped["positions"][0]["entry_pool"] == live_pool
+
+    prepared, notes = prepare_live_trader_state(_mixed_state())
+    assert len(open_positions(prepared)) == 1
+    assert prepared["positions"][0]["entry_pool"] == live_pool
+    assert any("dry-run" in n.lower() and "kept" in n.lower() for n in notes)
+
+
 def test_prepare_live_clears_dry_run_cooldown(tmp_path, monkeypatch) -> None:
     from bds_agent import paths
     from bds_agent.trader_state import (

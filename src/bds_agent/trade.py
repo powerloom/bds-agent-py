@@ -370,7 +370,7 @@ def _reentry_cooldown_minutes(cfg: TraderConfig) -> float:
 
 
 def _daily_loss_limit_hit(cfg: TraderConfig) -> bool:
-    pnl = daily_realized_pnl_usd(load_trades(cfg.profile))
+    pnl = daily_realized_pnl_usd(load_trades(cfg.profile), exclude_dry_run=True)
     return pnl <= -abs(cfg.daily_loss_limit_usd)
 
 
@@ -1307,6 +1307,7 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                     state = add_position(state, pos)
                     save_trader_state(state, cfg.profile)
                 else:
+                    _, weth_before = get_token_balances_human(rpc, wallet)
                     tx = swap_usdc_to_weth(
                         rpc,
                         pk,
@@ -1316,6 +1317,7 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                         weth_price_usd=price,
                     )
                     usdc_bal, weth_bal = get_token_balances_human(rpc, wallet)
+                    weth_delta = max(0.0, weth_bal - weth_before)
                     ts = utc_now_iso()
                     pos = new_position_record(
                         default_pool,
@@ -1323,7 +1325,7 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                         epoch_i=epoch_i,
                         size_usd=cfg.size_usd,
                         entry_tx=tx,
-                        token_balance=weth_bal,
+                        token_balance=weth_delta or weth_bal,
                         dry_run=False,
                         timestamp=ts,
                     )
