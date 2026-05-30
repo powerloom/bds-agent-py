@@ -49,6 +49,7 @@ bds-agent = "bds_agent.cli:main"
 dev = [
     "pytest>=8.0",
     "ruff>=0.9.0",
+    "pre-commit>=4.0",
 ]
 
 [build-system]

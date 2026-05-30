@@ -53,11 +53,14 @@ When the package is published to PyPI, **`uv tool upgrade bds-agent`** upgrades 
 ```bash
 cd bds-agent-py
 uv sync
+uv run pre-commit install   # optional: ruff --fix on commit (src/bds_agent/)
 uv run bds-agent --help
 uv run bds-agent --version
 ```
 
 Use **`uv run bds-agent …`** for every CLI invocation, or install with **`uv tool install .`** when you want a stable **`bds-agent`** on **`PATH`**.
+
+Pre-commit runs **`uv run ruff check --fix --unsafe-fixes src/bds_agent/`** when you change files under **`src/bds_agent/`**. Manual check: same command, or **`uv run pre-commit run --all-files`**.
 
 CLI: **[Typer](https://typer.tiangolo.com/)** + **httpx**.
 
