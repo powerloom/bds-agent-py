@@ -24,7 +24,7 @@ class WatchedPool:
     base_idx: int
     label: str
     frequency: int = 0
-    fee: int = 3000
+    fee: int = 0
     base_decimals: int = 18
     quote_decimals: int = 6
 
@@ -78,10 +78,14 @@ def watched_pool_from_entry(entry: dict[str, Any]) -> WatchedPool | None:
         return None
 
     base_meta = t0 if base_idx == 0 else t1
-    try:
-        fee = int(meta.get("fee") or 3000)
-    except (TypeError, ValueError):
-        fee = 3000
+    raw_fee = meta.get("fee")
+    if raw_fee is None:
+        fee = 0
+    else:
+        try:
+            fee = int(raw_fee)
+        except (TypeError, ValueError):
+            fee = 0
     try:
         base_decimals = int(base_meta.get("decimals") or 18)
     except (TypeError, ValueError):

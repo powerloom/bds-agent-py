@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from bds_agent.exit_strategies import ExitConfig, check_exit, update_peak_price
+from bds_agent.exit_strategies import ExitConfig, _parse_iso, check_exit, update_peak_price
 from bds_agent.trader_state import (
     daily_realized_pnl_usd,
     is_reentry_blocked,
@@ -56,6 +56,25 @@ def test_trailing_stop_triggers() -> None:
     # 2% down from peak 3100 = 3038
     reason = check_exit(state, current_price=3030.0, signal=None, cfg=cfg)
     assert reason == "trailing_stop"
+
+
+def test_parse_iso_accepts_naive_timestamp() -> None:
+    dt = _parse_iso("2026-05-20T12:00:00")
+    assert dt is not None
+    assert dt.tzinfo is not None
+    cfg = ExitConfig(
+        stop_loss=False,
+        take_profit=False,
+        trailing_stop=False,
+        time_based=True,
+        hold_minutes=10.0,
+        signal_reversal=False,
+    )
+    entry = datetime(2026, 5, 20, 12, 0, 0)
+    state = _long_state(entry_ts="2026-05-20T12:00:00")
+    now = entry + timedelta(minutes=11)
+    reason = check_exit(state, current_price=3000.0, signal=None, cfg=cfg, now=now)
+    assert reason == "time_based"
 
 
 def test_time_based_exit() -> None:

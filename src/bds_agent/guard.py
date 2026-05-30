@@ -570,7 +570,13 @@ def _execute_action(
     chain_id: int,
 ) -> dict[str, Any]:
     if cfg.dry_run:
-        return {"dry_run": True, "action": action, "price_usd": price}
+        new_position = "reserve" if action in ("take_profit_sell", "stop_loss_sell") else "token"
+        return {
+            "dry_run": True,
+            "action": action,
+            "price_usd": price,
+            "new_position": new_position,
+        }
     if action in ("take_profit_sell", "stop_loss_sell"):
         from eth_account import Account
 
@@ -682,6 +688,11 @@ def run_initial_entry_if_needed(
 
     if not cfg.enter:
         return position, None
+    if position == "reserve":
+        return position, {
+            "skipped": True,
+            "reason": "position is reserve — wait for dip/breakout re-entry band",
+        }
     if price is None or price <= 0:
         raise RuntimeError(
             "--enter requires a BDS USD price for sizing the USDC → base swap; "

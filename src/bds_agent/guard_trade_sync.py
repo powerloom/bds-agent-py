@@ -127,12 +127,13 @@ def _record_guard_entry(
     state = normalize_trader_state(load_trader_state(profile))
     if has_open_pool(state, pool.address):
         return
-    entry_px = float(
-        guard_state.get("reference_entry_usd")
-        or result.get("price_usd")
-        or price
-        or 0,
-    )
+    fill_px = float(result.get("price_usd") or price or 0)
+    if action in ("reentry_buy_dip", "reentry_buy_breakout"):
+        entry_px = fill_px or float(guard_state.get("reference_entry_usd") or 0)
+    else:
+        entry_px = float(
+            guard_state.get("reference_entry_usd") or fill_px or 0,
+        )
     if entry_px <= 0:
         return
     spent = float(result.get("size_usd") or size_usd)

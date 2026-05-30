@@ -440,8 +440,15 @@ def show_pnl(profile: str | None = None, *, console: Console | None = None) -> N
     out.print(f"Today P/L (UTC): ${daily:.2f}")
 
 
-def _usd_fetcher(base_url: str, api_key: str):
+def _usd_fetcher(
+    base_url: str,
+    api_key: str,
+    *,
+    out: Console | None = None,
+    abort_on_error: bool = False,
+):
     from bds_agent.usd_prices import fetch_token_usd_at_pool
+    from bds_agent.secrets import redact_secrets
 
     def fetch(pool: WatchedPool, epoch: int) -> float | None:
         try:
@@ -452,7 +459,14 @@ def _usd_fetcher(base_url: str, api_key: str):
                 pool.address,
                 epoch,
             )
-        except Exception:
+        except RuntimeError as exc:
+            if out is not None:
+                out.print(
+                    f"[bold red]USD PRICE FAIL[/] {pool.label} epoch={epoch}: "
+                    f"{redact_secrets(str(exc))}",
+                )
+            if abort_on_error:
+                raise
             return None
 
     return fetch
@@ -518,6 +532,12 @@ def _execute_exit(
             },
             cfg.profile,
         )
+        if not pos.get("dry_run"):
+            out.print(
+                "[yellow]DRY RUN[/] left live position in trader.json "
+                "(on-chain tokens unchanged)",
+            )
+            return state
     else:
         try:
             pool = pool_from_position(pos)
@@ -653,6 +673,38 @@ def reconcile_positions(
         out.print("[dim]No zero-balance positions to clear.[/]")
 
 
+def _market_exit_price(
+    pos: dict[str, Any],
+    *,
+    profile: str | None,
+    fallback: float,
+    out: Console | None = None,
+) -> float:
+    """BDS pool USD price for P/L logging; ``fallback`` when fetch fails."""
+    watched = pool_from_position(pos)
+    if watched is None or fallback <= 0:
+        return fallback
+    try:
+        from bds_agent.usd_prices import fetch_token_usd_at_pool
+
+        px = fetch_token_usd_at_pool(
+            _resolve_base_url(),
+            _resolve_api_key(profile),
+            watched.base_token,
+            watched.address,
+            None,
+        )
+        if px is not None and px > 0:
+            return float(px)
+    except Exception as exc:
+        if out is not None:
+            out.print(
+                f"[yellow]exit price fetch failed[/] {redact_secrets(str(exc))} "
+                f"— using entry ${fallback:g}",
+            )
+    return fallback
+
+
 def force_exit(
     cfg: TraderConfig,
     *,
@@ -677,13 +729,19 @@ def force_exit(
         pk, rpc, chain_id = _resolve_wallet()
         wallet = Account.from_key(pk).address
     for pos in positions:
-        price = float(pos.get("entry_price") or 0)
+        entry_px = float(pos.get("entry_price") or 0)
+        exit_px = _market_exit_price(
+            pos,
+            profile=cfg.profile,
+            fallback=entry_px,
+            out=out,
+        )
         state = _execute_exit(
             cfg,
             state,
             pos,
             epoch_i=int(pos.get("entry_epoch") or 0),
-            exit_price=price,
+            exit_price=exit_px,
             reason="manual",
             out=out,
             pk=pk,
@@ -739,6 +797,9 @@ def _execute_entry_live(
     epoch_i: int,
     out: Console,
 ) -> dict[str, Any] | None:
+    from bds_agent.evm_swap import enrich_watched_pool_fee
+
+    pool = enrich_watched_pool_fee(rpc, pool)
     if not pool.live_swap_ready():
         out.print(f"[yellow]LIVE skip[/] {pool.label} — missing pool fee/decimals metadata")
         return None
@@ -823,7 +884,11 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
 
     watchlist = _load_watchlist(cfg, base_url, api_key, out)
     tracker = MultiPoolTracker(watchlist)
-    usd_fetch = _usd_fetcher(base_url, api_key) if thresholds.price_source == "usd" else None
+    usd_fetch = (
+        _usd_fetcher(base_url, api_key, out=out, abort_on_error=False)
+        if thresholds.price_source == "usd"
+        else None
+    )
 
     pk = rpc = ""
     chain_id = cfg.chain_id
@@ -1087,7 +1152,11 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                     f"[yellow]Resuming pending exit[/] {pos.get('entry_label') or pos.get('entry_pool')} "
                     f"({pending}) — will retry when pool price is available",
                 )
-    usd_fetch = _usd_fetcher(base_url, api_key) if thresholds.price_source == "usd" else None
+    usd_fetch = (
+        _usd_fetcher(base_url, api_key, out=out, abort_on_error=True)
+        if thresholds.price_source == "usd"
+        else None
+    )
     default_pool = _default_usdc_weth_pool()
     weth_pool_key = default_pool.address.lower()
 

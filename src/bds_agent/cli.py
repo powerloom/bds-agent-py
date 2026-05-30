@@ -2180,6 +2180,7 @@ def guard_enter_cmd(
         utc_now_iso,
     )
     from bds_agent.guard_state import load_guard_state, save_guard_state
+    from bds_agent.guard_trade_sync import record_guard_fill
 
     cfg = normalize_guard_config(
         GuardConfig(
@@ -2226,6 +2227,19 @@ def guard_enter_cmd(
     state["last_price_usd"] = price
     if price and price > 0 and not (result or {}).get("skipped"):
         _record_spot_reference(state, action="initial_entry_buy", price=price)
+    if result and not result.get("skipped"):
+        record_guard_fill(
+            profile=profile,
+            pool=pool_wp,
+            size_usd=cfg.size_usd,
+            dry_run=cfg.dry_run,
+            guard_state=state,
+            action="initial_entry_buy",
+            result=result,
+            price=price,
+            rpc_url=rpc_url,
+            private_key=private_key,
+        )
     state["updated_at"] = utc_now_iso()
     save_guard_state(state, profile)
     typer.echo(f"enter {result}")

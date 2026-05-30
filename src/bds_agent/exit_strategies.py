@@ -43,7 +43,7 @@ def _parse_iso(ts: str | None) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tinfo=UTC)
+        dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(UTC)
 
 
@@ -127,6 +127,10 @@ def evaluate_exit_checks(
         checks.append(ExitCheck("trailing_stop", False, False, "off"))
 
     now_dt = now or datetime.now(UTC)
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=UTC)
+    else:
+        now_dt = now_dt.astimezone(UTC)
     if cfg.time_based:
         entry_dt = _parse_iso(state.get("entry_timestamp"))
         if entry_dt is None:
