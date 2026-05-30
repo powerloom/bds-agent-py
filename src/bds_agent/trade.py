@@ -784,6 +784,31 @@ def _load_watchlist(cfg: TraderConfig, base_url: str, api_key: str, out: Console
     return pools
 
 
+def _enrich_watchlist_for_live(
+    pools: list[WatchedPool],
+    *,
+    rpc_url: str,
+    out: Console,
+) -> list[WatchedPool]:
+    """On-chain fee/decimals before Pulse buffers (avoids inverted base_idx signals)."""
+    from bds_agent.evm_swap import enrich_watched_pool_fee
+
+    ready: list[WatchedPool] = []
+    for p in pools:
+        try:
+            ep = enrich_watched_pool_fee(rpc_url, p)
+        except Exception as exc:
+            out.print(f"[yellow]pool enrich failed[/] {p.label}: {exc}")
+            continue
+        if ep.live_swap_ready():
+            ready.append(ep)
+        else:
+            out.print(
+                f"[yellow]LIVE skip watch[/] {p.label} — missing pool fee/decimals metadata",
+            )
+    return ready or [_default_usdc_weth_pool()]
+
+
 def _execute_entry_live(
     cfg: TraderConfig,
     state: dict[str, Any],
@@ -883,12 +908,6 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
                 )
 
     watchlist = _load_watchlist(cfg, base_url, api_key, out)
-    tracker = MultiPoolTracker(watchlist)
-    usd_fetch = (
-        _usd_fetcher(base_url, api_key, out=out, abort_on_error=False)
-        if thresholds.price_source == "usd"
-        else None
-    )
 
     pk = rpc = ""
     chain_id = cfg.chain_id
@@ -896,6 +915,14 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
     if not cfg.dry_run:
         pk, rpc, chain_id = _resolve_wallet()
         wallet = Account.from_key(pk).address
+        watchlist = _enrich_watchlist_for_live(watchlist, rpc_url=rpc, out=out)
+
+    tracker = MultiPoolTracker(watchlist)
+    usd_fetch = (
+        _usd_fetcher(base_url, api_key, out=out, abort_on_error=False)
+        if thresholds.price_source == "usd"
+        else None
+    )
 
     labels = ", ".join(p.label for p in watchlist[:8])
     more = f" +{len(watchlist) - 8}" if len(watchlist) > 8 else ""
@@ -944,7 +971,16 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
                 epochs_since_refresh = 0
                 try:
                     refreshed = _load_watchlist(cfg, base_url, api_key, out)
-                    tracker.refresh_watchlist(refreshed)
+                    if not cfg.dry_run:
+                        refreshed = _enrich_watchlist_for_live(
+                            refreshed,
+                            rpc_url=rpc,
+                            out=out,
+                        )
+                    tracker.refresh_watchlist(
+                        refreshed,
+                        keep_pool_keys=open_pool_keys(state),
+                    )
                     if cfg.verbose:
                         out.print(f"[dim]watchlist[/] refreshed ({len(refreshed)} USDC pools)")
                 except Exception as exc:
@@ -1212,9 +1248,13 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
 
             state = normalize_trader_state(state)
             open_pools = open_pool_keys(state)
-            weth_pos = find_position(state, weth_pool_key) or (
-                open_positions(state)[0] if len(open_positions(state)) == 1 else None
-            )
+            weth_pos = find_position(state, weth_pool_key)
+            if weth_pos is None:
+                lone = open_positions(state)
+                if len(lone) == 1:
+                    only_key = str(lone[0].get("entry_pool") or "").lower()
+                    if only_key == weth_pool_key:
+                        weth_pos = lone[0]
 
             if cfg.verbose:
                 _print_verbose_epoch(

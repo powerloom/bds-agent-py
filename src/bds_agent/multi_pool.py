@@ -39,12 +39,26 @@ class MultiPoolTracker:
             for p in pools
         }
 
-    def refresh_watchlist(self, pools: list[WatchedPool]) -> None:
+    def refresh_watchlist(
+        self,
+        pools: list[WatchedPool],
+        *,
+        keep_pool_keys: set[str] | None = None,
+    ) -> None:
+        """Replace the active watch set; retain buffers only for open positions."""
+        keep = {k.lower() for k in (keep_pool_keys or set())}
+        new_keys = {p.address.lower() for p in pools}
+        for key in list(self.pools.keys()):
+            if key not in new_keys and key not in keep:
+                del self.pools[key]
+                self.buffers.pop(key, None)
         for p in pools:
             key = p.address.lower()
             self.pools[key] = p
             if key not in self.buffers:
                 self.buffers[key] = PulseBuffer(pool_address=key, base_idx=p.base_idx)
+            else:
+                self.buffers[key].base_idx = p.base_idx
 
     def ingest_snapshot(
         self,

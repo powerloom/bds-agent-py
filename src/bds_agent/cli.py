@@ -1562,6 +1562,11 @@ def _trade_thresholds(
     signal_cooldown_minutes: float,
     price_source: str = "trades",
 ) -> PulseThresholds:
+    src = price_source.strip().lower()
+    if src not in ("usd", "trades"):
+        raise ValueError(
+            f"--price-source must be 'usd' or 'trades', got {price_source!r}",
+        )
 
     return PulseThresholds(
         price_move_pct=price_move,
@@ -1569,7 +1574,7 @@ def _trade_thresholds(
         flow_imbalance_pct=flow_imbalance,
         window_seconds=int(window_minutes * 60),
         cooldown_seconds=max(0, int(signal_cooldown_minutes * 60)),
-        price_source=price_source,  # type: ignore[arg-type]
+        price_source=src,  # type: ignore[arg-type]
     )
 
 
@@ -1816,36 +1821,40 @@ def trade_run_cmd(
 
     resolved_max = max_open_positions if max_open_positions > 0 else (5 if multi_pool else 1)
 
-    cfg = _trade_config(
-        pair=pair,
-        size=size,
-        slippage=slippage,
-        dry_run=dry_run,
-        profile=profile,
-        price_move=price_move,
-        volume_burst=volume_burst,
-        flow_imbalance=flow_imbalance,
-        window_minutes=window_minutes,
-        reentry_cooldown_minutes=reentry_cooldown_minutes,
-        signal_cooldown_minutes=signal_cooldown_minutes,
-        max_open_positions=resolved_max,
-        daily_loss_limit=daily_loss_limit,
-        exit_signal_reversal=exit_signal_reversal,
-        exit_time_based=exit_time_based,
-        exit_hold_minutes=exit_hold_minutes,
-        exit_trailing_stop=exit_trailing_stop,
-        exit_trailing_pct=exit_trailing_pct,
-        exit_take_profit=exit_take_profit,
-        exit_take_profit_pct=exit_take_profit_pct,
-        exit_stop_loss=exit_stop_loss,
-        exit_stop_loss_pct=exit_stop_loss_pct,
-        verbose=verbose,
-        multi_pool=multi_pool,
-        active_pool_limit=active_pool_limit,
-        active_interval_seconds=active_interval,
-        price_source=price_source,
-        block_long_on_down_move=block_long_on_down_move,
-    )
+    try:
+        cfg = _trade_config(
+            pair=pair,
+            size=size,
+            slippage=slippage,
+            dry_run=dry_run,
+            profile=profile,
+            price_move=price_move,
+            volume_burst=volume_burst,
+            flow_imbalance=flow_imbalance,
+            window_minutes=window_minutes,
+            reentry_cooldown_minutes=reentry_cooldown_minutes,
+            signal_cooldown_minutes=signal_cooldown_minutes,
+            max_open_positions=resolved_max,
+            daily_loss_limit=daily_loss_limit,
+            exit_signal_reversal=exit_signal_reversal,
+            exit_time_based=exit_time_based,
+            exit_hold_minutes=exit_hold_minutes,
+            exit_trailing_stop=exit_trailing_stop,
+            exit_trailing_pct=exit_trailing_pct,
+            exit_take_profit=exit_take_profit,
+            exit_take_profit_pct=exit_take_profit_pct,
+            exit_stop_loss=exit_stop_loss,
+            exit_stop_loss_pct=exit_stop_loss_pct,
+            verbose=verbose,
+            multi_pool=multi_pool,
+            active_pool_limit=active_pool_limit,
+            active_interval_seconds=active_interval,
+            price_source=price_source,
+            block_long_on_down_move=block_long_on_down_move,
+        )
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
     from bds_agent.secrets import redact_secrets
 
     try:
@@ -2218,6 +2227,7 @@ def guard_enter_cmd(
             rpc_url=rpc_url,
             private_key=private_key,
             chain_id=chain_id,
+            allow_reserve_enter=True,
         )
     except RuntimeError as exc:
         print_error(str(exc))

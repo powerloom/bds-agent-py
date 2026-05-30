@@ -116,9 +116,14 @@ def _allow_reserve_enter(
     position: Position,
     *,
     begin_new_leg: bool,
+    pending_initial_entry: bool = False,
 ) -> bool:
     """USDC (reserve) + ``--enter``: fresh leg or post-``guard reset``, not mid-cycle dip wait."""
-    if position != "reserve" or not cfg.enter:
+    if position != "reserve":
+        return False
+    if pending_initial_entry:
+        return True
+    if not cfg.enter:
         return False
     if begin_new_leg:
         return True
@@ -916,10 +921,11 @@ def run_guard_sync(cfg: GuardConfig) -> None:
         else:
             state["position"] = position
             state["last_action"] = entry_result
-            state["pending_action"] = None
             state["last_execute_error"] = None
             state["last_price_usd"] = startup_price
             state["updated_at"] = utc_now_iso()
+            if entry_result and not entry_result.get("skipped"):
+                state["pending_action"] = None
             save_guard_state(state, cfg.profile)
             out.print(f"[bold green]ENTER[/] {entry_result}")
             if entry_result and not entry_result.get("skipped"):
@@ -1055,6 +1061,13 @@ def run_guard_sync(cfg: GuardConfig) -> None:
                             rpc_url=rpc_url,
                             private_key=private_key,
                             chain_id=chain_id,
+                            allow_reserve_enter=_allow_reserve_enter(
+                                cfg,
+                                state,
+                                position,
+                                begin_new_leg=begin_new_leg,
+                                pending_initial_entry=pending_retry,
+                            ),
                         )
                         if result is None:
                             result = {"skipped": True}
