@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from typing import Any
 
 from bds_agent.client import CLIENT_SOURCE_CLI, CLIENT_SOURCE_HEADER
 import httpx
 from web3 import Web3
+
+_RETRYABLE_HTTP = frozenset({429, 502, 503, 504})
+_DEFAULT_MAX_ATTEMPTS = 5
 
 
 def _headers(api_key: str) -> dict[str, str]:
@@ -63,6 +68,61 @@ def _parse_price_scalar(body: Any) -> float | None:
     return None
 
 
+def _retry_sleep_seconds(
+    *,
+    attempt: int,
+    resp: httpx.Response | None = None,
+) -> float:
+    if resp is not None:
+        raw = resp.headers.get("Retry-After")
+        if raw is not None:
+            try:
+                return max(1.0, min(float(raw), 60.0))
+            except ValueError:
+                pass
+    return min(60.0, 2.0**attempt)
+
+
+def _http_get_with_retry(
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout: float,
+    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    on_retry: Callable[[int, str], None] | None = None,
+) -> httpx.Response:
+    """GET with backoff on transient origin/gateway errors and network faults."""
+    last_error: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                resp = client.get(url, headers=headers)
+        except httpx.RequestError as exc:
+            last_error = exc
+            if attempt + 1 >= max_attempts:
+                raise RuntimeError(f"BDS request failed for {url}: {exc}") from exc
+            reason = f"network: {exc}"
+            if on_retry is not None:
+                on_retry(attempt + 1, reason)
+            time.sleep(_retry_sleep_seconds(attempt=attempt))
+            continue
+        if resp.status_code in _RETRYABLE_HTTP:
+            if attempt + 1 >= max_attempts:
+                detail = (resp.text or "")[:300]
+                raise RuntimeError(
+                    f"BDS price HTTP {resp.status_code} for {url}: {detail}",
+                )
+            reason = f"HTTP {resp.status_code}"
+            if on_retry is not None:
+                on_retry(attempt + 1, reason)
+            time.sleep(_retry_sleep_seconds(attempt=attempt, resp=resp))
+            continue
+        return resp
+    if last_error is not None:
+        raise RuntimeError(f"BDS request failed for {url}: {last_error}") from last_error
+    raise RuntimeError(f"BDS request failed for {url}: exhausted {max_attempts} attempts")
+
+
 def _parse_price_map(body: dict[str, Any]) -> dict[str, float]:
     out: dict[str, float] = {}
     for key, val in body.items():
@@ -85,6 +145,8 @@ def fetch_token_usd_in_pool(
     block_number: int | None = None,
     *,
     timeout: float = 30.0,
+    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    on_retry: Callable[[int, str], None] | None = None,
 ) -> float | None:
     """
     GET /mpp/token/price/{token}/{pool}[/{block}] — one pool, one scalar USD price.
@@ -101,11 +163,13 @@ def fetch_token_usd_in_pool(
         pool_address,
         block_number,
     )
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.get(url, headers=_headers(api_key))
-    except httpx.RequestError as exc:
-        raise RuntimeError(f"BDS price request failed for {url}: {exc}") from exc
+    resp = _http_get_with_retry(
+        url,
+        headers=_headers(api_key),
+        timeout=timeout,
+        max_attempts=max_attempts,
+        on_retry=on_retry,
+    )
     if resp.status_code in (404, 402):
         return None
     if resp.status_code >= 400:
@@ -128,6 +192,8 @@ def fetch_token_usd_at_pool(
     block_number: int | None = None,
     *,
     timeout: float = 30.0,
+    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    on_retry: Callable[[int, str], None] | None = None,
 ) -> float | None:
     """Alias for :func:`fetch_token_usd_in_pool` (preferred pool-scoped route)."""
     return fetch_token_usd_in_pool(
@@ -137,6 +203,8 @@ def fetch_token_usd_at_pool(
         pool_address,
         block_number,
         timeout=timeout,
+        max_attempts=max_attempts,
+        on_retry=on_retry,
     )
 
 
@@ -147,16 +215,20 @@ def fetch_all_token_prices(
     block_number: int | None = None,
     *,
     timeout: float = 30.0,
+    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    on_retry: Callable[[int, str], None] | None = None,
 ) -> dict[str, float]:
     """
     GET /mpp/tokenPrices/all/{token}[/{block}] → ``{pool_address_lower: usd_price}``.
     """
     url = _token_prices_all_url(base_url, token_address, block_number)
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.get(url, headers=_headers(api_key))
-    except httpx.RequestError as exc:
-        raise RuntimeError(f"BDS tokenPrices request failed for {url}: {exc}") from exc
+    resp = _http_get_with_retry(
+        url,
+        headers=_headers(api_key),
+        timeout=timeout,
+        max_attempts=max_attempts,
+        on_retry=on_retry,
+    )
     if resp.status_code == 404:
         return {}
     if resp.status_code >= 400:

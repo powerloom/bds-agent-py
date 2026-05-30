@@ -204,6 +204,7 @@ def _fetch_guard_price_usd(
     pool: WatchedPool,
     *,
     base_token: str,
+    out: Console | None = None,
 ) -> float | None:
     """
     Pool-scoped USD price from BDS (resolver picks latest snapshot server-side).
@@ -212,12 +213,21 @@ def _fetch_guard_price_usd(
     """
     api_key = _resolve_api_key(cfg.profile)
     base_url = _resolve_base_url(cfg.profile)
+
+    def on_retry(attempt: int, reason: str) -> None:
+        if out is not None:
+            out.print(
+                f"[yellow]PRICE RETRY[/] attempt {attempt} ({reason}) "
+                "[dim]— transient BDS/gateway; backing off[/]",
+            )
+
     return fetch_token_usd_in_pool(
         base_url,
         api_key,
         base_token,
         pool.address,
         None,
+        on_retry=on_retry if out is not None else None,
     )
 
 
@@ -803,7 +813,9 @@ def run_guard_sync(cfg: GuardConfig) -> None:
             "entry swap will fail until you top up USDC",
         )
 
-    startup_price = _fetch_guard_price_usd(cfg, pool, base_token=base_token)
+    startup_price = _fetch_guard_price_usd(
+        cfg, pool, base_token=base_token, out=out,
+    )
     if cfg.enter:
         try:
             position, entry_result = run_initial_entry_if_needed(
@@ -864,7 +876,7 @@ def run_guard_sync(cfg: GuardConfig) -> None:
             )
             break
         idle_note = _reserve_idle_note(cfg, state)
-        price = _fetch_guard_price_usd(cfg, pool, base_token=base_token)
+        price = _fetch_guard_price_usd(cfg, pool, base_token=base_token, out=out)
         if price is None:
             _print_guard_tick(
                 out,

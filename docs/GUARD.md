@@ -118,6 +118,8 @@ Stdout uses the same **UTC timestamp + Rich colors** as `bds-agent trade` pulse 
 
 ## STF / slippage / pending txs
 
+**BDS price poll:** `GET /mpp/token/price/...` retries up to **5** times on **502 / 503 / 504 / 429** and network errors (exponential backoff, honors `Retry-After`). Guard logs `[yellow]PRICE RETRY[/]` lines; then `price=unavailable` only if all attempts fail.
+
 See existing notes in this file (pool fee from chain, STF retry, `pending_action` backoff, pending mempool before `--enter`).
 
 ## Related
