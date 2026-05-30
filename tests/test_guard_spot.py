@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from bds_agent.active_markets import WatchedPool
 from bds_agent.guard import (
     GuardConfig,
+    _sync_guard_config_state,
     evaluate_threshold_cross,
     format_guard_band_log,
     normalize_guard_config,
@@ -133,11 +135,17 @@ def test_reserve_tick_log_omits_internal_high_band() -> None:
     assert "1992.96" in log
 
 
-def test_stop_loss_pct_must_be_less_than_take_profit() -> None:
-    with pytest.raises(RuntimeError, match="less than"):
-        normalize_guard_config(
-            GuardConfig(take_profit_pct=0.02, stop_loss_pct=0.05, enter=True),
-        )
+def test_wider_stop_loss_than_take_profit_allowed() -> None:
+    """Asymmetric risk: small TP, wide SL (e.g. 3% gain / 10% loss)."""
+    cfg = normalize_guard_config(
+        GuardConfig(take_profit_pct=0.03, stop_loss_pct=0.10, enter=True),
+    )
+    assert cfg.take_profit_pct == 0.03
+    assert cfg.stop_loss_pct == 0.10
+    entry = 2000.0
+    high, low = resolve_guard_bands(cfg, {"reference_entry_usd": entry}, position="token")
+    assert high == pytest.approx(2060.0)
+    assert low == pytest.approx(1800.0)
 
 
 def test_explicit_mode_unchanged() -> None:
@@ -148,3 +156,29 @@ def test_explicit_mode_unchanged() -> None:
     assert cfg.enter is False
     high, low = resolve_guard_bands(cfg, {}, position="token")
     assert high == 2012.0 and low == 2007.0
+
+
+def test_sync_guard_config_clears_stale_explicit_thresholds() -> None:
+    pool = WatchedPool(
+        address="0xe0554a476a092703abdb3ef35c80e0d76d32939f",
+        label="USDC/WETH",
+        token0="0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        token1="0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+        base_idx=1,
+        fee=500,
+    )
+    state = {
+        "pricing_mode": "explicit",
+        "threshold_high": 2006.0,
+        "threshold_low": 2002.0,
+    }
+    cfg = normalize_guard_config(GuardConfig(take_profit_pct=0.001, stop_loss_pct=0.0005))
+    _sync_guard_config_state(
+        state,
+        pool=pool,
+        base_token=pool.base_token,
+        cfg=cfg,
+    )
+    assert state["pricing_mode"] == "spot"
+    assert "threshold_high" not in state
+    assert "threshold_low" not in state

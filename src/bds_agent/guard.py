@@ -110,6 +110,57 @@ def reserve_idle_timed_out(reserve_max_minutes: float, state: dict[str, Any]) ->
     return elapsed >= reserve_max_minutes * 60.0
 
 
+def _allow_reserve_enter(
+    cfg: GuardConfig,
+    state: dict[str, Any],
+    position: Position,
+    *,
+    begin_new_leg: bool,
+) -> bool:
+    """USDC (reserve) + ``--enter``: fresh leg or post-``guard reset``, not mid-cycle dip wait."""
+    if position != "reserve" or not cfg.enter:
+        return False
+    if begin_new_leg:
+        return True
+    ref = state.get("reference_entry_usd")
+    return ref is None or (isinstance(ref, (int, float)) and float(ref) <= 0)
+
+
+def prepare_guard_run_state(
+    state: dict[str, Any],
+    cfg: GuardConfig,
+) -> tuple[dict[str, Any], bool]:
+    """
+    Bookkeeping at the start of ``guard run``.
+
+    Returns ``(state, begin_new_leg)``. When the prior run ended with
+    ``reserve_idle_timeout`` and this run uses ``--enter``, ``begin_new_leg`` is
+    True so a fresh USDC → base entry is allowed (orchestrator re-launch).
+    """
+    new_leg = False
+    if state.get("fresh_leg") and cfg.enter:
+        new_leg = True
+        state.pop("fresh_leg", None)
+        state.pop("reference_entry_usd", None)
+        state.pop("last_exit_usd", None)
+        state.pop("reserve_since", None)
+        state["last_action"] = None
+    if state.get("guard_exit_reason") == "reserve_idle_timeout":
+        state.pop("guard_exit_reason", None)
+        if cfg.enter:
+            new_leg = True
+            state.pop("reference_entry_usd", None)
+            state.pop("last_exit_usd", None)
+            state.pop("reserve_since", None)
+            state["last_action"] = None
+    if state.get("position") == "reserve" and cfg.reserve_max_minutes > 0:
+        if reserve_idle_timed_out(cfg.reserve_max_minutes, state):
+            state["reserve_since"] = utc_now_iso()
+        elif not state.get("reserve_since"):
+            sync_reserve_since(state, "reserve")
+    return state, new_leg
+
+
 def _reserve_idle_note(cfg: GuardConfig, state: dict[str, Any]) -> str:
     if cfg.reserve_max_minutes <= 0 or state.get("position") != "reserve":
         return ""
@@ -258,10 +309,6 @@ def normalize_guard_config(cfg: GuardConfig) -> GuardConfig:
         sl = float(cfg.stop_loss_pct)
         if sl <= 0 or sl >= 1:
             raise RuntimeError("--stop-loss-pct must be in (0, 1) (e.g. 0.02 for -2%).")
-        if sl >= tp:
-            raise RuntimeError(
-                f"--stop-loss-pct ({sl}) must be less than --take-profit-pct ({tp}).",
-            )
     if cfg.reserve_max_minutes < 0:
         raise RuntimeError("--reserve-max-minutes must be >= 0 (0 = no idle exit).")
     enter = cfg.enter if cfg.enter is not None else True
@@ -414,6 +461,30 @@ def resolve_guard_bands(
     if guard_pricing_mode(cfg) == "explicit":
         return float(cfg.threshold_high), float(cfg.threshold_low)
 
+    if position == "reserve":
+        exit_raw = state.get("last_exit_usd")
+        if exit_raw is None or float(exit_raw) <= 0:
+            raise RuntimeError(
+                "Spot mode in USDC (reserve) needs last_exit_usd from a prior exit, "
+                "or run with --enter to open a new leg.",
+            )
+        exit_price = float(exit_raw)
+        retrace = cfg.reentry_retrace_pct
+        entry_raw = state.get("reference_entry_usd")
+        if entry_raw is not None and float(entry_raw) > 0:
+            entry = float(entry_raw)
+            margin = exit_price - entry
+            if margin > 0:
+                reentry = exit_price - retrace * margin
+            else:
+                reentry = exit_price - retrace * (entry - exit_price)
+        elif cfg.stop_loss_pct is not None and float(cfg.stop_loss_pct) > 0:
+            sl = float(cfg.stop_loss_pct)
+            reentry = exit_price * (1.0 - retrace * sl)
+        else:
+            reentry = exit_price * (1.0 - retrace * effective_take_profit_pct(cfg))
+        return exit_price * _RESERVE_BREAKOUT_BLOCK, reentry
+
     entry_raw = state.get("reference_entry_usd")
     if entry_raw is None or float(entry_raw) <= 0:
         raise RuntimeError(
@@ -422,28 +493,12 @@ def resolve_guard_bands(
         )
     entry = float(entry_raw)
     tp = effective_take_profit_pct(cfg)
-
-    if position == "token":
-        high = entry * (1.0 + tp)
-        if cfg.stop_loss_pct is not None and cfg.stop_loss_pct > 0:
-            low = entry * (1.0 - float(cfg.stop_loss_pct))
-        else:
-            low = 0.0
-        return high, low
-
-    exit_raw = state.get("last_exit_usd")
-    if exit_raw is None or float(exit_raw) <= 0:
-        raise RuntimeError(
-            "Spot mode in USDC (reserve) needs last_exit_usd from a prior exit.",
-        )
-    exit_price = float(exit_raw)
-    margin = exit_price - entry
-    retrace = cfg.reentry_retrace_pct
-    if margin > 0:
-        reentry = exit_price - retrace * margin
+    high = entry * (1.0 + tp)
+    if cfg.stop_loss_pct is not None and cfg.stop_loss_pct > 0:
+        low = entry * (1.0 - float(cfg.stop_loss_pct))
     else:
-        reentry = exit_price - retrace * (entry - exit_price)
-    return exit_price * _RESERVE_BREAKOUT_BLOCK, reentry
+        low = 0.0
+    return high, low
 
 
 def _after_guard_fill(
@@ -514,6 +569,9 @@ def _sync_guard_config_state(
     if guard_pricing_mode(cfg) == "explicit":
         state["threshold_high"] = cfg.threshold_high
         state["threshold_low"] = cfg.threshold_low
+    else:
+        state.pop("threshold_high", None)
+        state.pop("threshold_low", None)
 
 
 def validate_threshold_brackets(threshold_high: float, threshold_low: float) -> None:
@@ -676,6 +734,7 @@ def run_initial_entry_if_needed(
     rpc_url: str | None,
     private_key: str | None,
     chain_id: int,
+    allow_reserve_enter: bool = False,
 ) -> tuple[Position, dict[str, Any] | None]:
     """
     On ``--enter``, swap USDC → base when wallet has negligible base balance.
@@ -688,7 +747,7 @@ def run_initial_entry_if_needed(
 
     if not cfg.enter:
         return position, None
-    if position == "reserve":
+    if position == "reserve" and not allow_reserve_enter:
         return position, {
             "skipped": True,
             "reason": "position is reserve — wait for dip/breakout re-entry band",
@@ -760,6 +819,7 @@ def run_guard_sync(cfg: GuardConfig) -> None:
     out: TimestampedConsole = make_tty_console(verbose=cfg.verbose)
     cfg = normalize_guard_config(cfg)
     state = load_guard_state(cfg.profile)
+    state, begin_new_leg = prepare_guard_run_state(state, cfg)
     private_key, rpc_url, chain_id = _resolve_guard_evm(cfg)
     pool, base_token = _prepare_guard_pool(cfg, state, rpc_url=rpc_url)
     from bds_agent.evm_swap import get_token_balances_human
@@ -771,7 +831,6 @@ def run_guard_sync(cfg: GuardConfig) -> None:
         cfg=cfg,
     )
     save_guard_state(state, cfg.profile)
-    sync_reserve_since(state, position)
 
     pool_from_state = not (cfg.pool and str(cfg.pool).strip())
     usdc_bal = 0.0
@@ -827,6 +886,12 @@ def run_guard_sync(cfg: GuardConfig) -> None:
     startup_price = _fetch_guard_price_usd(
         cfg, pool, base_token=base_token, out=out,
     )
+    allow_reserve_enter = _allow_reserve_enter(
+        cfg,
+        state,
+        position,
+        begin_new_leg=begin_new_leg,
+    )
     if cfg.enter:
         try:
             position, entry_result = run_initial_entry_if_needed(
@@ -837,6 +902,7 @@ def run_guard_sync(cfg: GuardConfig) -> None:
                 rpc_url=rpc_url,
                 private_key=private_key,
                 chain_id=chain_id,
+                allow_reserve_enter=allow_reserve_enter,
             )
         except Exception as exc:
             err_s = str(exc).split("\n", maxsplit=1)[0]
@@ -857,6 +923,7 @@ def run_guard_sync(cfg: GuardConfig) -> None:
             save_guard_state(state, cfg.profile)
             out.print(f"[bold green]ENTER[/] {entry_result}")
             if entry_result and not entry_result.get("skipped"):
+                state.pop("fresh_leg", None)
                 _after_guard_fill(
                     cfg=cfg,
                     pool=pool,
@@ -1038,12 +1105,45 @@ def run_guard_sync(cfg: GuardConfig) -> None:
         time.sleep(cfg.poll_seconds)
 
 
+def _print_spot_status_bands(out: Console, state: dict[str, Any]) -> None:
+    """Active spot bands from persisted %% settings (not stale explicit USD levels)."""
+    pos = state.get("position")
+    if pos not in ("token", "reserve"):
+        return
+    tp = state.get("take_profit_pct")
+    sl = state.get("stop_loss_pct")
+    retrace = state.get("reentry_retrace_pct")
+    if tp is None and sl is None:
+        return
+    try:
+        cfg = normalize_guard_config(
+            GuardConfig(
+                take_profit_pct=float(tp) if tp is not None else None,
+                stop_loss_pct=float(sl) if sl is not None else None,
+                reentry_retrace_pct=float(retrace) if retrace is not None else 0.5,
+                enter=False,
+            ),
+        )
+        high, low = resolve_guard_bands(cfg, state, position=pos)
+    except RuntimeError as exc:
+        out.print(f"  [dim]spot_bands=[/][yellow]{exc}[/]")
+        return
+    if pos == "token":
+        out.print(f"  [dim]spot_tp=[/][green]${high:g}[/]  [dim]spot_stop=[/][yellow]${low:g}[/]")
+    else:
+        out.print(
+            f"  [dim]spot_reentry_below=[/][cyan]${low:g}[/]  "
+            f"[dim](breakout block internal)[/]",
+        )
+
+
 def show_guard_status(profile: str | None = None) -> None:
     out = make_tty_console()
     prof = profile or resolve_profile_name() or "(none)"
     state = load_guard_state(profile)
+    mode = state.get("pricing_mode") or "spot"
     out.print(f"[bold blue]GUARD STATUS[/] profile [cyan]{prof}[/]")
-    for key in (
+    keys = (
         "pool_address",
         "pool_label",
         "base_token",
@@ -1053,8 +1153,6 @@ def show_guard_status(profile: str | None = None) -> None:
         "take_profit_pct",
         "stop_loss_pct",
         "reentry_retrace_pct",
-        "threshold_high",
-        "threshold_low",
         "position",
         "last_price_usd",
         "last_action",
@@ -1062,9 +1160,19 @@ def show_guard_status(profile: str | None = None) -> None:
         "reserve_max_minutes",
         "guard_exit_reason",
         "updated_at",
-    ):
+    )
+    if mode == "explicit":
+        keys = (
+            *keys[:9],
+            "threshold_high",
+            "threshold_low",
+            *keys[9:],
+        )
+    for key in keys:
         val = state.get(key)
         out.print(f"  [dim]{key}=[/]{val}")
+    if mode == "spot":
+        _print_spot_status_bands(out, state)
     if not state.get("pool_address"):
         out.print(
             "  [dim italic]hint: run guard once with --pool <0x…> and --token "

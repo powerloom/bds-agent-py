@@ -10,6 +10,7 @@ from bds_agent.positions import (
     add_position,
     find_position,
     has_open_pool,
+    is_paper_position,
     new_position_record,
     normalize_trader_state,
     remove_position,
@@ -233,6 +234,8 @@ def _record_guard_exit(
         profile,
     )
     if pos is not None:
+        if dry_run and not is_paper_position(pos):
+            return
         state = remove_position(state, pool.address)
         state = _refresh_balances(
             state,

@@ -239,6 +239,33 @@ def test_prepare_live_keeps_live_position_when_paper_also_open() -> None:
     assert any("dry-run" in n.lower() and "kept" in n.lower() for n in notes)
 
 
+def test_strip_dry_run_clears_per_pool_cooldown() -> None:
+    from bds_agent.positions import strip_dry_run_positions
+
+    paper_pool = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    state = {
+        "positions": [
+            {
+                "entry_pool": paper_pool,
+                "entry_label": "PAPER",
+                "entry_token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "entry_token0": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                "entry_token1": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "entry_base_idx": 1,
+                "entry_fee": 500,
+                "entry_base_decimals": 18,
+                "entry_price": 2100.0,
+                "entry_tx": "dry-run",
+                "dry_run": True,
+            },
+        ],
+        "pool_reentry_blocked": {paper_pool.lower(): "2099-01-01T00:00:00Z"},
+    }
+    stripped, removed = strip_dry_run_positions(state)
+    assert removed == 1
+    assert stripped.get("pool_reentry_blocked", {}).get(paper_pool.lower()) is None
+
+
 def test_prepare_live_clears_dry_run_cooldown(tmp_path, monkeypatch) -> None:
     from bds_agent import paths
     from bds_agent.trader_state import (

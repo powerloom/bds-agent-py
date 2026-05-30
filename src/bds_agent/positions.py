@@ -151,9 +151,20 @@ def strip_dry_run_positions(state: dict[str, Any]) -> tuple[dict[str, Any], int]
     """Remove paper positions only; keep live LONGs. Returns (state, removed_count)."""
     state = normalize_trader_state(state)
     before = open_positions(state)
+    removed_pools = [
+        _pool_key(str(p.get("entry_pool") or ""))
+        for p in before
+        if is_paper_position(p)
+    ]
     kept = [p for p in before if not is_paper_position(p)]
     removed = len(before) - len(kept)
     state["positions"] = kept
+    blocked = state.get("pool_reentry_blocked")
+    if isinstance(blocked, dict):
+        for pk in removed_pools:
+            blocked.pop(pk, None)
+    if removed > 0 and not kept:
+        state["reentry_blocked_until"] = None
     return sync_legacy_top_level(state), removed
 
 

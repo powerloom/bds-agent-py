@@ -662,10 +662,18 @@ def swap_weth_to_usdc(
     slippage: float = 0.005,
     weth_price_usd: float | None = None,
 ) -> str:
-    amount_weth = int(weth_amount * 1e18)
+    amount_weth, sell_human = _cap_sell_amount_atomic(
+        rpc_url,
+        private_key,
+        WETH,
+        weth_amount,
+        18,
+    )
+    if amount_weth <= 0:
+        raise RuntimeError("No WETH balance to sell")
     amount_out_min = 0
     if weth_price_usd and weth_price_usd > 0:
-        expected_usdc = weth_amount * weth_price_usd
+        expected_usdc = sell_human * weth_price_usd
         amount_out_min = int(expected_usdc * 1_000_000 * (1.0 - slippage))
     return send_uniswap_v3_swap(
         rpc_url,

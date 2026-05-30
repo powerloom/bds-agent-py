@@ -2086,10 +2086,10 @@ def guard_run_cmd(
         "-v",
         help="Include full pool address on every tick line (always shown on startup).",
     ),
-    enter: bool = typer.Option(
-        True,
+    enter: Optional[bool] = typer.Option(
+        None,
         "--enter/--no-enter",
-        help="Buy base at current BDS spot on start (default on). --no-enter if already holding.",
+        help="Spot mode: buy at startup (default on). Explicit mode: default off unless --enter.",
     ),
     reentry_on_breakout: bool = typer.Option(
         False,
@@ -2252,6 +2252,29 @@ def guard_status_cmd(profile: ProfileCliOption = None) -> None:
     from bds_agent.guard import show_guard_status
 
     show_guard_status(profile)
+
+
+@guard_app.command("reset")
+def guard_reset_cmd(
+    profile: ProfileCliOption = None,
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help="Drop pool/token anchors too (default keeps pool for same market).",
+    ),
+) -> None:
+    """Clear guard cycle state after reserve_idle_timeout (or manual reset)."""
+    _apply_profile_option(profile)
+    from bds_agent.guard_state import reset_guard_state_for_new_leg
+
+    state = reset_guard_state_for_new_leg(profile, keep_pool=not full)
+    pool = state.get("pool_address") or "(none)"
+    typer.echo(
+        f"guard state reset for profile {profile or 'default'} "
+        f"(pool={pool}, position=reserve, fresh_leg=True). "
+        "Cleared reference_entry_usd, last_exit_usd, reserve_since. "
+        "Next: guard run ... --enter",
+    )
 
 
 def main() -> None:

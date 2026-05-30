@@ -9,6 +9,7 @@ Bracket trades on **one** USDC-quoted pool. Price source: `GET /mpp/token/price/
 | `bds-agent guard run` | Poll BDS spot, edge-trigger bracket trades (default **spot** %% bands) |
 | `bds-agent guard enter` | One-shot USDC → base at spot (same as `guard run --enter` without polling) |
 | `bds-agent guard status` | Read `.guard.json` (position, bands, `guard_exit_reason`, …) |
+| `bds-agent guard reset` | Clear exit/entry anchors + set `fresh_leg` (keeps pool + %% settings); then `guard run --enter` |
 
 After each on-chain fill, guard mirrors **ENTRY** / **EXIT** into **`trader.json`** and the trades log for the same profile — use **`bds-agent trade status`**, **`history`**, **`pnl`** alongside **`guard status`**.
 
@@ -103,7 +104,13 @@ If price only rips higher after take-profit, dip re-entry never fires and the pr
 bds-agent guard run --profile myagent ... --reserve-max-minutes 45
 reason=$(jq -r .guard_exit_reason ~/.config/bds-agent/profiles/myagent.guard.json)
 # reason == reserve_idle_timeout → cycle complete; else crashed or Ctrl+C
+
+# Next leg: same command with --enter (clears stale reserve timer + idle reason)
+bds-agent guard run --profile myagent ... --reserve-max-minutes 45 --enter
+# Or: bds-agent guard reset --profile myagent && guard run ... --enter
 ```
+
+After **`reserve_idle_timeout`**, a new `guard run --enter` starts a **fresh leg** (USDC → base at spot). Without `--enter`, the run only watches for dip re-entry and gets a **new** reserve idle window (stale `reserve_since` is not reused).
 
 | `guard_exit_reason` | Meaning |
 |---------------------|---------|
