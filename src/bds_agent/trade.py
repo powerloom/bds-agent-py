@@ -809,6 +809,22 @@ def _enrich_watchlist_for_live(
     return ready or [_default_usdc_weth_pool()]
 
 
+def _merge_watchlist_open_positions(
+    watchlist: list[WatchedPool],
+    state: dict[str, Any],
+) -> list[WatchedPool]:
+    """Include held pools so exits still get tape after watchlist refresh drops them."""
+    by_key = {p.address.lower(): p for p in watchlist}
+    for pos in open_positions(state):
+        key = str(pos.get("entry_pool") or "").lower()
+        if not key or key in by_key:
+            continue
+        wp = pool_from_position(pos)
+        if wp is not None:
+            by_key[key] = wp
+    return list(by_key.values())
+
+
 def _execute_entry_live(
     cfg: TraderConfig,
     state: dict[str, Any],
@@ -889,7 +905,7 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
     thresholds = cfg.thresholds or PulseThresholds()
     if cfg.price_source:
         thresholds = PulseThresholds(
-            **{**thresholds.__dict__, "price_source": cfg.price_source},
+            **{**thresholds.__dict__, "price_source": cfg.price_source.strip().lower()},
         )
     exit_cfg = cfg.exit or ExitConfig()
     state = normalize_trader_state(load_trader_state(cfg.profile))
@@ -917,6 +933,7 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
         wallet = Account.from_key(pk).address
         watchlist = _enrich_watchlist_for_live(watchlist, rpc_url=rpc, out=out)
 
+    watchlist = _merge_watchlist_open_positions(watchlist, state)
     tracker = MultiPoolTracker(watchlist)
     usd_fetch = (
         _usd_fetcher(base_url, api_key, out=out, abort_on_error=False)
@@ -1170,7 +1187,7 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
     thresholds = cfg.thresholds or PulseThresholds()
     if cfg.price_source:
         thresholds = PulseThresholds(
-            **{**thresholds.__dict__, "price_source": cfg.price_source},
+            **{**thresholds.__dict__, "price_source": cfg.price_source.strip().lower()},
         )
     exit_cfg = cfg.exit or ExitConfig()
     buffer = PulseBuffer(pool_address=pool.lower(), base_idx=1)

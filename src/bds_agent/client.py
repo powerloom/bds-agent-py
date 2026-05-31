@@ -144,6 +144,8 @@ async def stream(
             raise
         except GeneratorExit:
             raise
+        except BdsClientError:
+            raise
         except Exception:
             if not reconnect:
                 raise

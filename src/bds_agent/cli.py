@@ -1553,6 +1553,15 @@ def llm_ping_cmd(
         raise typer.Exit(1) from exc
 
 
+def _normalize_price_source(price_source: str) -> str:
+    src = price_source.strip().lower()
+    if src not in ("usd", "trades"):
+        raise ValueError(
+            f"--price-source must be 'usd' or 'trades', got {price_source!r}",
+        )
+    return src
+
+
 def _trade_thresholds(
     
     price_move: float,
@@ -1562,11 +1571,7 @@ def _trade_thresholds(
     signal_cooldown_minutes: float,
     price_source: str = "trades",
 ) -> PulseThresholds:
-    src = price_source.strip().lower()
-    if src not in ("usd", "trades"):
-        raise ValueError(
-            f"--price-source must be 'usd' or 'trades', got {price_source!r}",
-        )
+    src = _normalize_price_source(price_source)
 
     return PulseThresholds(
         price_move_pct=price_move,
@@ -1612,6 +1617,8 @@ def _trade_config(
     from bds_agent.exit_strategies import ExitConfig
     from bds_agent.trade import TraderConfig
 
+    price_src = _normalize_price_source(price_source)
+
     return TraderConfig(
         pair=pair,
         size_usd=size,
@@ -1624,7 +1631,7 @@ def _trade_config(
             flow_imbalance,
             window_minutes,
             signal_cooldown_minutes,
-            price_source,
+            price_src,
         ),
         reentry_cooldown_minutes=max(0.0, reentry_cooldown_minutes),
         max_open_positions=max(1, max_open_positions),
@@ -1644,7 +1651,7 @@ def _trade_config(
         multi_pool=multi_pool,
         active_pool_limit=active_pool_limit,
         active_interval_seconds=active_interval_seconds,
-        price_source=price_source,
+        price_source=price_src,
         block_long_on_down_move=block_long_on_down_move,
     )
 
