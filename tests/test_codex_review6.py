@@ -46,6 +46,49 @@ def test_pending_initial_entry_allows_reserve_enter() -> None:
     )
 
 
+def test_execute_entry_live_swap_failure_returns_none(monkeypatch) -> None:
+    from bds_agent.active_markets import WatchedPool
+    from bds_agent.trade import TraderConfig, _execute_entry_live
+
+    pool = WatchedPool(
+        "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
+        USDC_ADDRESS,
+        "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        1,
+        "USDC/WETH",
+        fee=500,
+    )
+    monkeypatch.setattr(
+        "bds_agent.evm_swap.enrich_watched_pool_fee",
+        lambda _rpc, p: p,
+    )
+    monkeypatch.setattr(
+        "bds_agent.trade.get_erc20_balance_human",
+        lambda *_a, **_k: 0.0,
+    )
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("STF")
+
+    monkeypatch.setattr("bds_agent.evm_swap.swap_usdc_to_token", _boom)
+    state: dict = {"positions": []}
+    out = __import__("rich.console", fromlist=["Console"]).Console(quiet=True)
+    result = _execute_entry_live(
+        TraderConfig(),
+        state,
+        pool,
+        rpc="http://x",
+        pk="0x" + "11" * 32,
+        wallet="0x" + "22" * 20,
+        chain_id=1,
+        price=3000.0,
+        epoch_i=1,
+        out=out,
+    )
+    assert result is None
+    assert not state.get("positions")
+
+
 def test_reserve_enter_blocked_without_pending_or_fresh_leg() -> None:
     cfg = GuardConfig(enter=True)
     state = {"reference_entry_usd": 2000.0}

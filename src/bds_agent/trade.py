@@ -1348,14 +1348,24 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                     save_trader_state(state, cfg.profile)
                 else:
                     _, weth_before = get_token_balances_human(rpc, wallet)
-                    tx = swap_usdc_to_weth(
-                        rpc,
-                        pk,
-                        cfg.size_usd,
-                        chain_id=chain_id,
-                        slippage=cfg.slippage,
-                        weth_price_usd=price,
-                    )
+                    try:
+                        tx = swap_usdc_to_weth(
+                            rpc,
+                            pk,
+                            cfg.size_usd,
+                            chain_id=chain_id,
+                            slippage=cfg.slippage,
+                            weth_price_usd=price,
+                        )
+                    except Exception as exc:
+                        out.print(
+                            f"[red]ENTRY swap failed[/] USDC/WETH: {redact_secrets(str(exc))}",
+                        )
+                        out.print(
+                            "[yellow]No position recorded.[/] "
+                            "Raise [cyan]--slippage[/] or wait for calmer tape.",
+                        )
+                        continue
                     usdc_bal, weth_bal = get_token_balances_human(rpc, wallet)
                     weth_delta = max(0.0, weth_bal - weth_before)
                     ts = utc_now_iso()
