@@ -121,6 +121,15 @@ def _trader_console(*, verbose: bool = False) -> Console:
     return make_tty_console(verbose=verbose)  # type: ignore[return-value]
 
 
+def _price_usable(price: float | None) -> bool:
+    return price is not None and float(price) > 0
+
+
+def _consume_pulse_signal(buffer: PulseBuffer | None, *, now_ms: int | None = None) -> None:
+    if buffer is not None:
+        buffer.consume_signal(now_ms=now_ms)
+
+
 def _gate_markup(ok: bool) -> str:
     return "[bold green]PASS[/]" if ok else "[red]fail[/]"
 
@@ -1076,6 +1085,8 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
                 if pending:
                     exit_reason = str(pending)
                 if exit_reason:
+                    if pending and not _price_usable(price):
+                        continue
                     exit_price = float(price or pos.get("entry_price") or 0)
                     state = _execute_exit(
                         cfg,
@@ -1090,6 +1101,11 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
                         wallet=wallet,
                         chain_id=chain_id,
                     )
+                    if exit_reason == "signal_reversal" and not has_open_pool(
+                        state,
+                        pool_addr,
+                    ):
+                        _consume_pulse_signal(tracker.get_buffer(pool_addr))
 
             # ENTRY — fill open slots with ranked LONGs (skip pools already held)
             if slots > 0:
@@ -1142,6 +1158,7 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
                         )
                         state = add_position(state, pos)
                         save_trader_state(state, cfg.profile)
+                        _consume_pulse_signal(tracker.get_buffer(r.pool.address))
                     else:
                         new_state = _execute_entry_live(
                             cfg,
@@ -1158,6 +1175,7 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
                         if new_state is None:
                             continue
                         state = new_state
+                        _consume_pulse_signal(tracker.get_buffer(r.pool.address))
 
     except BdsClientError as e:
         out.print(f"[red]stream failed[/] {e}")
@@ -1308,6 +1326,8 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                 if pending:
                     exit_reason = str(pending)
                 if exit_reason:
+                    if pending and not _price_usable(price):
+                        continue
                     exit_price = float(price or weth_pos.get("entry_price") or 0)
                     state = _execute_exit(
                         cfg,
@@ -1322,6 +1342,11 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                         wallet=wallet,
                         chain_id=chain_id,
                     )
+                    if exit_reason == "signal_reversal" and not has_open_pool(
+                        state,
+                        weth_pool_key,
+                    ):
+                        _consume_pulse_signal(buffer)
 
             if signal == "LONG":
                 down_block = _long_entry_down_move_block(cfg, diag)
@@ -1363,6 +1388,7 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                     )
                     state = add_position(state, pos)
                     save_trader_state(state, cfg.profile)
+                    _consume_pulse_signal(buffer)
                 else:
                     _, weth_before = get_token_balances_human(rpc, wallet)
                     try:
@@ -1413,6 +1439,7 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                         cfg.profile,
                     )
                     out.print(f"[green]ENTERED LONG[/] @ {price} tx={tx}")
+                    _consume_pulse_signal(buffer)
 
     except BdsClientError as e:
         out.print(f"[red]stream failed[/] {e}")

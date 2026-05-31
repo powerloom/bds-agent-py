@@ -175,10 +175,14 @@ class PulseBuffer:
             diag.skip_reason = "gates_failed"
             return diag
 
-        self.last_fire_ts_ms = now_m
         diag.signal = "LONG" if short.net_usd >= 0 else "SHORT"
         diag.skip_reason = "signal"
         return diag
+
+    def consume_signal(self, *, now_ms: int | None = None) -> None:
+        """Start post-fire cooldown after the trader acts on a signal."""
+        now_m = now_ms if now_ms is not None else _now_sec() * 1000
+        self.last_fire_ts_ms = now_m
 
     def detect(
         self,

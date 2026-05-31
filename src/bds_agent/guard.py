@@ -82,7 +82,7 @@ def sync_reserve_since(state: dict[str, Any], position: Position) -> None:
     """Track when we entered USDC (reserve) for idle timeout."""
     if position == "reserve":
         if not state.get("reserve_since"):
-            state["reserve_since"] = state.get("updated_at") or utc_now_iso()
+            state["reserve_since"] = utc_now_iso()
     else:
         state.pop("reserve_since", None)
 
@@ -537,8 +537,10 @@ def _after_guard_fill(
     if guard_pricing_mode(cfg) == "spot" and isinstance(act, str):
         _record_spot_reference(state, action=act, price=price)
     new_pos = result.get("new_position")
-    if new_pos in ("token", "reserve"):
-        sync_reserve_since(state, new_pos)
+    if new_pos == "reserve":
+        state["reserve_since"] = utc_now_iso()
+    elif new_pos == "token":
+        state.pop("reserve_since", None)
 
 
 def _record_spot_reference(
