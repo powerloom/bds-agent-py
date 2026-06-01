@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from bds_agent.client import CLIENT_SOURCE_CLI, CLIENT_SOURCE_HEADER
+from bds_agent.signup_api import credits_exhausted_hint
 import httpx
 from web3 import Web3
 
@@ -170,7 +171,9 @@ def fetch_token_usd_in_pool(
         max_attempts=max_attempts,
         on_retry=on_retry,
     )
-    if resp.status_code in (404, 402):
+    if resp.status_code == 402:
+        raise RuntimeError(credits_exhausted_hint())
+    if resp.status_code == 404:
         return None
     if resp.status_code >= 400:
         detail = (resp.text or "")[:300]
@@ -229,6 +232,8 @@ def fetch_all_token_prices(
         max_attempts=max_attempts,
         on_retry=on_retry,
     )
+    if resp.status_code == 402:
+        raise RuntimeError(credits_exhausted_hint())
     if resp.status_code == 404:
         return {}
     if resp.status_code >= 400:

@@ -29,6 +29,7 @@ from bds_agent.evm_swap import (
 from bds_agent.exit_strategies import ExitCheck, ExitConfig, check_exit, evaluate_exit_checks, update_peak_price
 from bds_agent.secrets import redact_secrets
 from bds_agent.profile_env import resolve_bds_base_url
+from bds_agent.signup_api import credits_exhausted_hint
 from bds_agent.active_markets import WatchedPool, fetch_daily_active_pools
 from bds_agent.multi_pool import MultiPoolTracker
 from bds_agent.positions import (
@@ -548,8 +549,9 @@ def _execute_exit(
             )
             return state
     else:
+        pool = pool_from_position(pos)
+        tx = ""
         try:
-            pool = pool_from_position(pos)
             if pool is not None and pool.live_swap_ready():
                 wallet_bal = get_erc20_balance_human(
                     rpc,
@@ -573,7 +575,6 @@ def _execute_exit(
                     slippage=cfg.slippage,
                     token_price_usd=exit_price,
                 )
-                usdc_bal = get_erc20_balance_human(rpc, USDC, wallet, 6)
             else:
                 weth_bal = float(pos.get("token_balance") or state.get("weth_balance") or 0)
                 if weth_bal <= 0:
@@ -586,7 +587,6 @@ def _execute_exit(
                     slippage=cfg.slippage,
                     weth_price_usd=exit_price,
                 )
-                usdc_bal, _ = get_token_balances_human(rpc, wallet)
         except Exception as exc:
             pos["exit_pending"] = reason
             save_trader_state(state, cfg.profile)
@@ -599,6 +599,18 @@ def _execute_exit(
                 "Or [cyan]bds-agent trade exit[/] with higher [cyan]--slippage[/].",
             )
             return state
+        usdc_bal = float(state.get("usdc_balance") or 0)
+        try:
+            if pool is not None and pool.live_swap_ready():
+                usdc_bal = get_erc20_balance_human(rpc, USDC, wallet, 6)
+            else:
+                usdc_bal, _ = get_token_balances_human(rpc, wallet)
+        except Exception as exc:
+            out.print(
+                f"[yellow]Balance read after exit failed[/] {label}: "
+                f"{redact_secrets(str(exc))} "
+                "[dim]— recording exit from confirmed swap[/]",
+            )
         append_trade(
             {
                 "type": "EXIT",
@@ -871,9 +883,30 @@ def _execute_entry_live(
             "Raise [cyan]--slippage[/] for illiquid pools or wait for calmer tape.",
         )
         return None
-    usdc_bal = get_erc20_balance_human(rpc, USDC, wallet, 6)
-    token_after = get_erc20_balance_human(rpc, pool.base_token, wallet, pool.base_decimals)
-    token_delta = max(0.0, token_after - token_before)
+    usdc_bal = float(state.get("usdc_balance") or 0)
+    token_after = token_before
+    token_delta = 0.0
+    try:
+        usdc_bal = get_erc20_balance_human(rpc, USDC, wallet, 6)
+        token_after = get_erc20_balance_human(
+            rpc,
+            pool.base_token,
+            wallet,
+            pool.base_decimals,
+        )
+        token_delta = max(0.0, token_after - token_before)
+    except Exception as exc:
+        out.print(
+            f"[yellow]Balance read after entry failed[/] {pool.label}: "
+            f"{redact_secrets(str(exc))} "
+            "[dim]— recording position from confirmed swap[/]",
+        )
+        if price and float(price) > 0:
+            token_delta = spent_usd / float(price)
+            token_after = token_before + token_delta
+    token_balance = token_delta or token_after or (
+        (spent_usd / float(price)) if price and float(price) > 0 else 0.0
+    )
     ts = utc_now_iso()
     pos = new_position_record(
         pool,
@@ -881,7 +914,7 @@ def _execute_entry_live(
         epoch_i=epoch_i,
         size_usd=spent_usd,
         entry_tx=tx,
-        token_balance=token_delta or token_after,
+        token_balance=token_balance,
         dry_run=False,
         timestamp=ts,
     )
@@ -974,7 +1007,9 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
     try:
         async for chunk in stream_gen:
             if chunk.credit_balance is not None and chunk.credit_balance <= 0:
-                out.print("[yellow]credit balance 0[/] — top up at bds-metering.powerloom.io")
+                out.print(
+                    f"[yellow]credit balance 0[/] — {credits_exhausted_hint()}",
+                )
 
             data = chunk.data
             if data.get("skipped"):
@@ -1085,9 +1120,13 @@ async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
                 if pending:
                     exit_reason = str(pending)
                 if exit_reason:
-                    if pending and not _price_usable(price):
+                    if not cfg.dry_run and not _price_usable(price):
                         continue
-                    exit_price = float(price or pos.get("entry_price") or 0)
+                    exit_price = (
+                        float(price)
+                        if _price_usable(price)
+                        else float(pos.get("entry_price") or 0)
+                    )
                     state = _execute_exit(
                         cfg,
                         state,
@@ -1253,7 +1292,9 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
     try:
         async for chunk in stream_gen:
             if chunk.credit_balance is not None and chunk.credit_balance <= 0:
-                out.print("[yellow]credit balance 0[/] — top up at bds-metering.powerloom.io")
+                out.print(
+                    f"[yellow]credit balance 0[/] — {credits_exhausted_hint()}",
+                )
 
             data = chunk.data
             if data.get("skipped"):
@@ -1326,9 +1367,13 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                 if pending:
                     exit_reason = str(pending)
                 if exit_reason:
-                    if pending and not _price_usable(price):
+                    if not cfg.dry_run and not _price_usable(price):
                         continue
-                    exit_price = float(price or weth_pos.get("entry_price") or 0)
+                    exit_price = (
+                        float(price)
+                        if _price_usable(price)
+                        else float(weth_pos.get("entry_price") or 0)
+                    )
                     state = _execute_exit(
                         cfg,
                         state,
@@ -1409,8 +1454,24 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                             "Raise [cyan]--slippage[/] or wait for calmer tape.",
                         )
                         continue
-                    usdc_bal, weth_bal = get_token_balances_human(rpc, wallet)
-                    weth_delta = max(0.0, weth_bal - weth_before)
+                    usdc_bal = float(state.get("usdc_balance") or 0)
+                    weth_bal = weth_before
+                    weth_delta = 0.0
+                    try:
+                        usdc_bal, weth_bal = get_token_balances_human(rpc, wallet)
+                        weth_delta = max(0.0, weth_bal - weth_before)
+                    except Exception as exc:
+                        out.print(
+                            f"[yellow]Balance read after entry failed[/] USDC/WETH: "
+                            f"{redact_secrets(str(exc))} "
+                            "[dim]— recording position from confirmed swap[/]",
+                        )
+                        if price and float(price) > 0:
+                            weth_delta = cfg.size_usd / float(price)
+                            weth_bal = weth_before + weth_delta
+                    token_balance = weth_delta or weth_bal or (
+                        (cfg.size_usd / float(price)) if price and float(price) > 0 else 0.0
+                    )
                     ts = utc_now_iso()
                     pos = new_position_record(
                         default_pool,
@@ -1418,7 +1479,7 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                         epoch_i=epoch_i,
                         size_usd=cfg.size_usd,
                         entry_tx=tx,
-                        token_balance=weth_delta or weth_bal,
+                        token_balance=token_balance,
                         dry_run=False,
                         timestamp=ts,
                     )

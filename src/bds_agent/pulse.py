@@ -198,11 +198,13 @@ class PulseBuffer:
             latest = self.usd_samples[-1][1]
             if latest > 0:
                 return latest
-        prices = [t.price for t in self.trades if t.price and t.price > 0]
-        if not prices:
-            return None
-        prices.sort()
-        return prices[len(prices) // 2]
+        latest_ts = -1
+        latest_px: float | None = None
+        for t in self.trades:
+            if t.price and t.price > 0 and t.ts >= latest_ts:
+                latest_ts = t.ts
+                latest_px = t.price
+        return latest_px
 
 
 @dataclass
