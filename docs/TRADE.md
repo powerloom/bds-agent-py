@@ -205,6 +205,10 @@ bds-agent credits usage by-endpoint --days 7 --limit 50
 
 There is **no** separate charge for “Pulse actions” or running `bds-agent trade`.
 
+**HTTP 402:** USD price fetches raise with a top-up hint (`https://bds-metering.powerloom.io/metering` or `bds-agent credits topup`) — the trader stops rather than running on stale prices.
+
+**Invalid API key:** SSE stream fails with `BdsClientError` (no infinite reconnect).
+
 ---
 
 ## Ops commands

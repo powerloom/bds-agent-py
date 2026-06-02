@@ -30,7 +30,7 @@ metadata:
 
 # bds-agent (Powerloom BDS CLI)
 
-> **Version:** 2026-05-29 · **Canonical human docs:** [docs/USER_GUIDE.md](https://github.com/powerloom/bds-agent-py/blob/main/docs/USER_GUIDE.md) (install, profiles, metering HTTP, MCP, LLM, **trade**, **guard**). Re-read that file after `git pull` or `uv tool install --force .`.
+> **Version:** 2026-06-01 · **Canonical human docs:** [docs/USER_GUIDE.md](https://github.com/powerloom/bds-agent-py/blob/main/docs/USER_GUIDE.md) (install, profiles, metering HTTP, MCP, LLM, **trade**, **guard**). Re-read that file after `git pull` or `uv tool install --force .`.
 
 This file is a **framework-neutral** index: any orchestrator, IDE, or autonomous agent can read it to learn how to drive the **bds-agent** CLI and the **public HTTP** surfaces it calls. It is not a substitute for `USER_GUIDE.md` (full tables, precedence, troubleshooting).
 
@@ -102,6 +102,7 @@ The metering service implements **bds-agenthub-billing-metering**. Authoritative
 | `bds-agent guard run` | Threshold Guard: spot %% TP/SL + dip re-entry on one pool; see **GUARD.md** |
 | `bds-agent guard enter` | One-shot USDC → base at BDS spot (no polling) |
 | `bds-agent guard status` | `.guard.json`: position, bands, `guard_exit_reason` |
+| `bds-agent guard reset` | Clear cycle anchors after `reserve_idle_timeout`; then `guard run --enter` |
 | `bds-agent run <agent.yaml>` | Stream/fetch BDS, rules, sinks; optional **`verify: true`** in YAML |
 | `bds-agent query "…"` | NL → catalog route + params; optional **`--execute`** to call BDS |
 | `bds-agent create "…"` | NL → `agent.yaml` (needs LLM) |
@@ -113,7 +114,7 @@ Deeper help: `bds-agent <cmd> --help` and the [README](https://github.com/powerl
 
 ## Pulse trader (`bds-agent trade`)
 
-Self-contained **Pulse** recipe: streams **`/mpp/stream/allTrades`**, detects confluence (price + volume + flow), executes **USDC ↔ token** swaps on Uniswap V3 (ETH mainnet) — **multi-pool** alt pairs when `--multi-pool` is set. **USD Price Feed** (`--price-source usd`, default) powers the price gate. **One LONG at a time.** Full flags: [docs/TRADE.md](https://github.com/powerloom/bds-agent-py/blob/main/docs/TRADE.md).
+Streams **`/mpp/stream/allTrades`**, runs Pulse entry/exit rules, swaps on Uniswap V3 (ETH mainnet). **`--multi-pool`** watches top USDC pools; **`--price-source usd`** (default) uses premium **`/mpp/tokenPrices/`**. Full flags: [docs/TRADE.md](https://github.com/powerloom/bds-agent-py/blob/main/docs/TRADE.md).
 
 **Bootstrap (example profile `pulse` — any name works; same `--profile` everywhere):**
 
@@ -133,7 +134,7 @@ bds-agent trade run --profile pulse --multi-pool --price-source usd --size 25 --
 
 **Billing:** Stream + premium **`/mpp/tokenPrices/`** API credits when using USD price source — **not** a separate agent-action fee. Check **`bds-agent credits usage by-endpoint`**.
 
-**Critical:** `trade run` reads **`TRADE_EVM_*`** from **`.trade.env` only** — never billing **`EVM_*`** from **`.evm.env`**. Live startup clears paper dry-run position/cooldown. Re-entry cooldown is **off by default** (`--reentry-cooldown-minutes`); daily loss limit blocks new entries only.
+**Critical:** `trade run` reads **`TRADE_EVM_*`** from **`.trade.env` only** — never billing **`EVM_*`** from **`.evm.env`**. Live startup strips paper positions/cooldowns. **`--price-source`** must be `usd` or `trades` (validated). Ops: **`status`**, **`history`**, **`pnl`**, **`exit`**, **`reconcile`**.
 
 ## Threshold Guard (`bds-agent guard`)
 
@@ -160,7 +161,7 @@ bds-agent trade status --profile myguard   # mirrored LONG/FLAT + P/L
 
 **Explicit mode:** both `--threshold-high` and `--threshold-low` (USD per 1 base token); optional `--reentry-on-breakout` (explicit only today).
 
-**Behavior:** Actions fire on **crosses** between polls (`prev → current`), not every tick inside a band. After TP you are **`reserve`** (USDC); re-buy on cross **down** through `reentry_below`. Price only going up → `hold` until dip or idle timeout.
+**Behavior:** Edge-triggered crosses between polls. After TP/SL → **`reserve`** (USDC); dip re-entry on cross down through `reentry_below`. **`--reserve-max-minutes`** sets `guard_exit_reason=reserve_idle_timeout` — orchestrators call **`guard reset`** then **`guard run … --enter`** for the next leg.
 
 **Trade sync:** Each guard fill appends to **`profiles/<n>.trades.jsonl`** and updates **`trader.json`** — same profile as **`trade status`** / **`pnl`**.
 
@@ -181,9 +182,21 @@ Full list: [USER_GUIDE — Prerequisites and env](https://github.com/powerloom/b
 
 BDS and MCP tool payloads can include **`verification`** (e.g. **CID**, **epochId**, **projectId**). The **`bds_mpp_*` / `verify_data_provenance` tools** and **`agent.yaml`** with **`verify: true`** are how you check on-chain commitments — there is no standalone `bds-agent verify` command. See [AGENT_YAML.md](https://github.com/powerloom/bds-agent-py/blob/main/docs/AGENT_YAML.md) and [USER_GUIDE — On-chain snapshot verification](https://github.com/powerloom/bds-agent-py/blob/main/docs/USER_GUIDE.md#on-chain-snapshot-verification-bds-agent-run).
 
+## Failure modes (orchestrators)
+
+| Condition | Behavior |
+|-----------|----------|
+| **HTTP 402** / zero credits on USD price routes | **`RuntimeError`** with hint: add credits at **`https://bds-metering.powerloom.io/metering`** or **`bds-agent credits topup`** — not silent hold |
+| **Invalid / expired API key** on SSE stream | **`BdsClientError`** — process exits; no infinite reconnect |
+| **Transient BDS 502/503/504/429** (guard price poll) | Retries with `[PRICE RETRY]` logs; then `price=unavailable` |
+| **Swap failure** (trade/guard) | Logged; guard keeps `pending_action` + backoff; trade single-pool **`continue`**s epoch loop |
+| **`reserve_idle_timeout`** | Guard exits; read **`guard_exit_reason`** from **`.guard.json`**; **`guard reset`** + **`guard run --enter`** for fresh leg |
+
+Metering **origin** (`BDS_AGENT_SIGNUP_URL`, default **`https://bds-metering.powerloom.io`**) is **not** the browser UI path — human top-up is **`/metering`** on the same host.
+
 ## Common mistakes
 
-- **Mixing URLs:** Metering **≠** BDS `BDS_BASE_URL`. Store both correctly (`config init` helps).
+- **Mixing URLs:** Metering origin **≠** **`/metering`** UI **≠** BDS `BDS_BASE_URL`. Store all three correctly (`config init` helps for BDS).
 - **MCP and stdout:** **Nothing** may print to stdout except JSON-RPC from **`bds-agent mcp`**.
 - **Catalog empty:** Set **`BDS_API_ENDPOINTS_CATALOG_JSON`** or **`BDS_SOURCES_JSON`** and **`BDS_BASE_URL`**, plus a valid API key on the profile.
 - **Pay-signup / top-up:** `plan_id`, `chain_id`, and `token_symbol` must match a **`GET /credits/plans`** row; on-chain `from` must match the quoted payer for pay-signup.

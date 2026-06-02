@@ -13,8 +13,7 @@ from bds_agent.client import BdsClientError, StreamChunk, stream
 from eth_account import Account
 from rich.console import Console
 from bds_agent.tty_console import format_price_px, make_tty_console
-from bds_agent.credentials import load_credentials, resolve_profile_name
-from bds_agent.defaults import DEFAULT_BDS_BASE_URL
+from bds_agent.credentials import resolve_profile_name
 from bds_agent.trade_config import resolve_trade_wallet
 from bds_agent.evm_swap import (
     USDC,
@@ -28,7 +27,7 @@ from bds_agent.evm_swap import (
 )
 from bds_agent.exit_strategies import ExitCheck, ExitConfig, check_exit, evaluate_exit_checks, update_peak_price
 from bds_agent.secrets import redact_secrets
-from bds_agent.profile_env import resolve_bds_base_url
+from bds_agent.prices_cmd import _resolve_api_key, _resolve_base_url
 from bds_agent.signup_api import credits_exhausted_hint
 from bds_agent.active_markets import WatchedPool, fetch_daily_active_pools
 from bds_agent.multi_pool import MultiPoolTracker
@@ -358,21 +357,6 @@ def _pool_trades(snapshot: dict[str, Any], pool_address: str) -> list[dict[str, 
 
 def _resolve_wallet() -> tuple[str, str, int]:
     return resolve_trade_wallet()
-
-
-def _resolve_api_key(profile: str | None) -> str:
-    creds = load_credentials()
-    if not creds:
-        raise RuntimeError("No BDS credentials. Run: bds-agent signup")
-    key = creds.get("api_key")
-    if not isinstance(key, str) or not key.startswith("sk_live_"):
-        raise RuntimeError("Invalid or missing api_key in profile credentials.")
-    return key
-
-
-def _resolve_base_url() -> str:
-    bu = resolve_bds_base_url()
-    return (bu or DEFAULT_BDS_BASE_URL).rstrip("/")
 
 
 def _reentry_cooldown_minutes(cfg: TraderConfig) -> float:
@@ -709,7 +693,7 @@ def _market_exit_price(
         from bds_agent.usd_prices import fetch_token_usd_at_pool
 
         px = fetch_token_usd_at_pool(
-            _resolve_base_url(),
+            _resolve_base_url(profile),
             _resolve_api_key(profile),
             watched.base_token,
             watched.address,
@@ -943,7 +927,7 @@ def _execute_entry_live(
 
 async def _run_multi_pool_trader(cfg: TraderConfig, *, out: Console) -> None:
     api_key = _resolve_api_key(cfg.profile)
-    base_url = _resolve_base_url()
+    base_url = _resolve_base_url(cfg.profile)
     thresholds = cfg.thresholds or PulseThresholds()
     if cfg.price_source:
         thresholds = PulseThresholds(
@@ -1240,7 +1224,7 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
 
     pool = pair_cfg["pool"]
     api_key = _resolve_api_key(cfg.profile)
-    base_url = _resolve_base_url()
+    base_url = _resolve_base_url(cfg.profile)
     thresholds = cfg.thresholds or PulseThresholds()
     if cfg.price_source:
         thresholds = PulseThresholds(

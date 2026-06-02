@@ -803,9 +803,9 @@ def run_initial_entry_if_needed(
             "reason": f"already hold {base_bal:g} base",
             "base_balance": base_bal,
         }
-    if usdc_bal < cfg.size_usd * 0.99:
+    if usdc_bal <= 0:
         raise RuntimeError(
-            f"Insufficient USDC for --enter: need ~${cfg.size_usd:g}, wallet has ${usdc_bal:g} USDC",
+            f"No USDC for --enter: wallet has ${usdc_bal:g} USDC",
         )
     result = execute_initial_entry(
         cfg,
@@ -882,12 +882,12 @@ def run_guard_sync(cfg: GuardConfig) -> None:
         cfg.enter
         and private_key
         and rpc_url
-        and usdc_bal < cfg.size_usd * 0.99
+        and 0 < usdc_bal < cfg.size_usd * 0.99
     ):
         out.print(
             "[bold yellow]WARN[/] USDC balance "
             f"[red]${usdc_bal:g}[/] < size [yellow]${cfg.size_usd:g}[/] — "
-            "entry swap will fail until you top up USDC",
+            "entry will spend available USDC (capped to wallet balance)",
         )
 
     startup_price = _fetch_guard_price_usd(

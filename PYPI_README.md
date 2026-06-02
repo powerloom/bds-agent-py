@@ -71,7 +71,7 @@ bds-agent guard run --profile myguard \
 | `bds-agent trade run` | Pulse trader (see `docs/TRADE.md`) |
 | `bds-agent prices at` / `prices token` | USD price feed (pool-scoped or all pools) |
 | `bds-agent guard run` | Threshold Guard bracket trading (see `docs/GUARD.md`) |
-| `bds-agent guard enter` / `guard status` | USDC → base entry or guard state |
+| `bds-agent guard enter` / `guard status` / `guard reset` | USDC → base entry, guard state, or cycle reset |
 | `bds-agent run <agent.yaml>` | SSE stream → rules → sinks |
 | `bds-agent query "…"` | NL → endpoint + params (LLM) |
 | `bds-agent create "…"` | NL → `agent.yaml` (LLM + validation) |
@@ -82,6 +82,10 @@ bds-agent guard run --profile myguard \
 ## Requirements
 
 - Python 3.12 or higher
+
+## Orchestrators
+
+Framework-neutral command index, env vars, failure modes (402, stream auth): **[SKILL.md](https://github.com/powerloom/bds-agent-py/blob/main/SKILL.md)** in the repo root.
 
 ## Documentation
 

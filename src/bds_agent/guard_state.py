@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from bds_agent.credentials import resolve_profile_name
-from bds_agent.paths import profiles_dir
+from bds_agent.paths import profiles_dir, sanitize_profile_name
 
 
 def guard_state_path(profile: str | None = None) -> Path:
-    name = profile or resolve_profile_name() or "default"
+    raw = profile or resolve_profile_name() or "default"
+    name = sanitize_profile_name(str(raw).strip())
     return profiles_dir() / f"{name}.guard.json"
 
 

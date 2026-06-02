@@ -401,6 +401,10 @@ bds-agent guard run --profile myguard \
 bds-agent guard status --profile myguard    # .guard.json fields
 bds-agent trade status --profile myguard    # LONG / FLAT + P/L after fills
 bds-agent trade history --profile myguard
+
+# After reserve_idle_timeout — fresh leg
+bds-agent guard reset --profile myguard
+bds-agent guard run --profile myguard ... --enter
 ```
 
 **Logs:** UTC timestamp + Rich colors (same style as **`trade run --verbose`**). `NO_COLOR=1` disables color.

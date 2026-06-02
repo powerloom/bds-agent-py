@@ -100,7 +100,7 @@ If you still have a single **`~/.config/bds-agent/tempo.env`**, move it to **`pr
 | `bds-agent trade run` | Pulse trader: BDS stream → Uniswap V3 multi-pool (USD price gate); see `docs/TRADE.md` |
 | `bds-agent prices at` / `prices token` | USD spot per pool or all pools (`/mpp/token/price/`, `/mpp/tokenPrices/all/`) |
 | `bds-agent guard run` | Threshold Guard: spot %% bands or explicit USD thresholds; see `docs/GUARD.md` |
-| `bds-agent guard enter` / `guard status` | One-shot USDC → base; `.guard.json` + `guard_exit_reason` |
+| `bds-agent guard enter` / `guard status` / `guard reset` | One-shot USDC → base; `.guard.json` + `guard_exit_reason`; reset cycle for next leg |
 | `bds-agent query "…"` | NL → endpoint + params (LLM); optional **`--execute`** to call BDS — see **`docs/USER_GUIDE.md`** |
 | `bds-agent create "…"` | NL → **`agent.yaml`** (LLM + validation); **`--output`** / **`-o`** optional — see **`docs/USER_GUIDE.md`** |
 | `bds-agent llm status` / `setup` / `ping` | Configure and test LLM backends (`~/.config/bds-agent/llm.json`) |
