@@ -312,16 +312,10 @@ def _fee_tiers_to_try(primary: int, **_kwargs: Any) -> list[int]:
 
 
 def _amount_out_min_attempts(amount_out_min: int) -> list[int]:
-    """Relax minimum output on repeated simulation failures (STF)."""
+    """Single attempt at the configured slippage floor — no silent relax to zero."""
     if amount_out_min <= 0:
         return [0]
-    return [
-        amount_out_min,
-        int(amount_out_min * 0.9),
-        int(amount_out_min * 0.75),
-        int(amount_out_min * 0.5),
-        0,
-    ]
+    return [amount_out_min]
 
 
 def _send_uniswap_v3_swap_one_fee(

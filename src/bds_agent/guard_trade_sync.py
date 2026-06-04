@@ -134,7 +134,11 @@ def _record_guard_entry(
         else:
             return
     fill_px = float(result.get("price_usd") or price or 0)
-    if action in ("reentry_buy_dip", "reentry_buy_breakout"):
+    if action == "initial_entry_buy":
+        entry_px = fill_px if fill_px > 0 else float(
+            guard_state.get("reference_entry_usd") or 0,
+        )
+    elif action in ("reentry_buy_dip", "reentry_buy_breakout"):
         entry_px = fill_px or float(guard_state.get("reference_entry_usd") or 0)
     else:
         entry_px = float(

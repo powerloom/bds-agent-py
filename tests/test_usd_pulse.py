@@ -33,6 +33,6 @@ def test_usd_price_gate_passes_on_head_tail_move() -> None:
                 dedupe_key=f"k{i}",
             ),
         )
-    diag = evaluate_pulse(buf, th, now_ts=now)
+    diag = evaluate_pulse(buf, th, now_ts=now, now_epoch=126)
     assert diag.price_pct > 0.15
     assert diag.price_ok is True

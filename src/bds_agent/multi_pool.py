@@ -97,7 +97,7 @@ class MultiPoolTracker:
                 if usd_px is not None:
                     buf.record_usd_price(epoch_i, usd_px)
             price = buf.current_price()
-            diag = evaluate_pulse(buf, thresholds)
+            diag = evaluate_pulse(buf, thresholds, now_epoch=epoch_i)
             results.append(
                 PoolEpochResult(
                     pool=pool,
@@ -145,12 +145,12 @@ class MultiPoolTracker:
         ]
         if not longs:
             return []
+        longs.sort(key=lambda r: confluence_score(r.diag, thresholds), reverse=True)
         if prefer_alt_pools:
             weth = WETH.lower()
             alts = [r for r in longs if r.pool.base_token.lower() != weth]
-            if alts:
-                longs = alts
-        longs.sort(key=lambda r: confluence_score(r.diag, thresholds), reverse=True)
+            weths = [r for r in longs if r.pool.base_token.lower() == weth]
+            longs = alts + weths
         return longs[: max(0, limit)]
 
     def get_buffer(self, pool_address: str) -> PulseBuffer | None:

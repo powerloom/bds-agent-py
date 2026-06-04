@@ -2245,6 +2245,7 @@ def guard_enter_cmd(
     if price and price > 0 and not (result or {}).get("skipped"):
         _record_spot_reference(state, action="initial_entry_buy", price=price)
     if result and not result.get("skipped"):
+        state.pop("fresh_leg", None)
         record_guard_fill(
             profile=profile,
             pool=pool_wp,

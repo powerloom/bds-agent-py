@@ -17,10 +17,9 @@ def test_float_amount_in_can_exceed_atomic_balance() -> None:
     assert desired > balance_atomic
 
 
-def test_amount_out_min_attempts_relax_to_zero() -> None:
+def test_amount_out_min_attempts_honors_configured_floor() -> None:
     attempts = _amount_out_min_attempts(10_000_000)
-    assert attempts[0] == 10_000_000
-    assert attempts[-1] == 0
+    assert attempts == [10_000_000]
 
 
 def test_is_swap_retryable_slippage_only() -> None:

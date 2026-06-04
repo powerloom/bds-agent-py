@@ -1294,7 +1294,7 @@ async def run_trader(cfg: TraderConfig, *, console: Console | None = None) -> No
                 if usd_px is not None:
                     buffer.record_usd_price(epoch_i, usd_px)
             price = buffer.current_price()
-            diag = evaluate_pulse(buffer, thresholds)
+            diag = evaluate_pulse(buffer, thresholds, now_epoch=epoch_i)
             signal = diag.signal
 
             state = normalize_trader_state(state)

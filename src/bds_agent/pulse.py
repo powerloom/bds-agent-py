@@ -98,8 +98,13 @@ class PulseBuffer:
         *,
         now_ts: int | None = None,
         now_ms: int | None = None,
+        now_epoch: int | None = None,
     ) -> PulseDiagnostics:
-        now_s = now_ts or _now_sec()
+        if self.trades:
+            trade_now = max(t.ts for t in self.trades)
+        else:
+            trade_now = _now_sec()
+        now_s = now_ts if now_ts is not None else trade_now
         now_m = now_ms if now_ms is not None else now_s * 1000
         diag = PulseDiagnostics(buffer_trades=len(self.trades))
 
@@ -146,11 +151,19 @@ class PulseBuffer:
         head_price: float | None = None
         tail_price: float | None = None
         if thresholds.price_source == "usd":
-            price_pct, head_price, tail_price = _usd_price_move(
-                self.usd_samples,
-                thresholds.window_seconds,
-                now_s,
+            epoch_ref = (
+                now_epoch
+                if now_epoch is not None
+                else (self.usd_samples[-1][0] if self.usd_samples else None)
             )
+            if epoch_ref is None:
+                price_pct, head_price, tail_price = 0.0, None, None
+            else:
+                price_pct, head_price, tail_price = _usd_price_move(
+                    self.usd_samples,
+                    thresholds.window_seconds,
+                    epoch_ref,
+                )
         elif short.first_price and short.last_price and short.first_price > 0:
             price_pct = ((short.last_price - short.first_price) / short.first_price) * 100.0
         burst = short.vol_usd / baseline_short if baseline_short > 0 else 0.0
@@ -190,8 +203,14 @@ class PulseBuffer:
         *,
         now_ts: int | None = None,
         now_ms: int | None = None,
+        now_epoch: int | None = None,
     ) -> PulseSignal:
-        return self.evaluate(thresholds, now_ts=now_ts, now_ms=now_ms).signal
+        return self.evaluate(
+            thresholds,
+            now_ts=now_ts,
+            now_ms=now_ms,
+            now_epoch=now_epoch,
+        ).signal
 
     def current_price(self) -> float | None:
         if self.usd_samples:
@@ -278,14 +297,14 @@ def _usd_window_epochs(window_seconds: int) -> int:
 def _usd_price_move(
     samples: list[tuple[int, float]],
     window_seconds: int,
-    now_ts: int,
+    now_epoch: int | None,
 ) -> tuple[float, float | None, float | None]:
-    """Head/tail USD move % using epoch-ordered samples (epoch ≈ block height)."""
+    """Head/tail USD move % using BDS epoch-ordered samples (not wall-clock)."""
     if len(samples) < 2:
         return 0.0, None, None
     window_epochs = _usd_window_epochs(window_seconds)
-    approx_epoch = now_ts // 12 if now_ts > 1_000_000 else samples[-1][0]
-    cutoff = approx_epoch - window_epochs
+    ref_epoch = now_epoch if now_epoch is not None else samples[-1][0]
+    cutoff = ref_epoch - window_epochs
     win = [(e, p) for e, p in samples if e >= cutoff]
     if len(win) < 2:
         win = samples[-min(len(samples), window_epochs) :]
@@ -309,6 +328,7 @@ def detect_pulse(
     *,
     now_ts: int | None = None,
     now_ms: int | None = None,
+    now_epoch: int | None = None,
 ) -> PulseSignal:
     """Evaluate confluence on a populated :class:`PulseBuffer`."""
     return evaluate_pulse(
@@ -316,6 +336,7 @@ def detect_pulse(
         thresholds,
         now_ts=now_ts,
         now_ms=now_ms,
+        now_epoch=now_epoch,
     ).signal
 
 
@@ -325,10 +346,16 @@ def evaluate_pulse(
     *,
     now_ts: int | None = None,
     now_ms: int | None = None,
+    now_epoch: int | None = None,
 ) -> PulseDiagnostics:
     """Return confluence metrics and signal (if any) without extra stream calls."""
     th = _resolve_thresholds(thresholds)
-    return buffer.evaluate(th, now_ts=now_ts, now_ms=now_ms)
+    return buffer.evaluate(
+        th,
+        now_ts=now_ts,
+        now_ms=now_ms,
+        now_epoch=now_epoch,
+    )
 
 
 def _now_sec() -> int:
