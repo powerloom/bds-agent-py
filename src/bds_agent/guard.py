@@ -645,20 +645,31 @@ def _execute_action(
     if action in ("take_profit_sell", "stop_loss_sell"):
         from eth_account import Account
 
+        from bds_agent.positions import find_position, normalize_trader_state, position_sell_tokens
+        from bds_agent.trader_state import load_trader_state
+
         owner = Account.from_key(private_key.strip()).address
-        balance = get_erc20_balance_human(
+        wallet_bal = get_erc20_balance_human(
             rpc_url,
             pool.base_token,
             owner,
             pool.base_decimals,
         )
-        if balance <= 0:
+        trader_state = normalize_trader_state(load_trader_state(cfg.profile))
+        pos = find_position(trader_state, pool.address)
+        sell_amt = position_sell_tokens(
+            pos,
+            wallet_bal,
+            fallback_size_usd=cfg.size_usd,
+            fallback_price_usd=price,
+        )
+        if sell_amt <= 0:
             raise RuntimeError("No base token balance to sell")
         tx = swap_token_to_usdc(
             rpc_url,
             private_key,
             pool,
-            balance,
+            sell_amt,
             slippage=cfg.slippage,
             token_price_usd=price,
             chain_id=chain_id,

@@ -143,6 +143,26 @@ def is_paper_position(pos: dict[str, Any]) -> bool:
     return bool(pos.get("dry_run") or pos.get("entry_tx") == "dry-run")
 
 
+def position_sell_tokens(
+    pos: dict[str, Any] | None,
+    wallet_balance: float,
+    *,
+    fallback_size_usd: float = 0.0,
+    fallback_price_usd: float = 0.0,
+) -> float:
+    """Human base amount to sell — position record capped by wallet (not full wallet)."""
+    if wallet_balance <= 0:
+        return 0.0
+    if pos is not None:
+        recorded = float(pos.get("token_balance") or 0.0)
+        if recorded > 0:
+            return min(recorded, wallet_balance)
+    if fallback_size_usd > 0 and fallback_price_usd > 0:
+        est = fallback_size_usd / fallback_price_usd
+        return min(wallet_balance, est)
+    return wallet_balance
+
+
 def is_dry_run_open(state: dict[str, Any]) -> bool:
     return any(is_paper_position(p) for p in open_positions(state))
 

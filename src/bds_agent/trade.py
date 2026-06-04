@@ -44,6 +44,7 @@ from bds_agent.positions import (
     open_positions,
     pool_from_position,
     position_count,
+    position_sell_tokens,
     remove_position,
     set_pool_reentry_cooldown,
 )
@@ -466,21 +467,6 @@ def _usd_fetcher(
     return fetch
 
 
-def _position_sell_tokens(
-    pos: dict[str, Any],
-    cfg: TraderConfig,
-    wallet_balance: float,
-) -> float:
-    """Human base token amount to sell — position record capped by wallet balance."""
-    _ = cfg
-    if wallet_balance <= 0:
-        return 0.0
-    recorded = float(pos.get("token_balance") or 0.0)
-    if recorded > 0:
-        return min(recorded, wallet_balance)
-    return wallet_balance
-
-
 def _execute_exit(
     cfg: TraderConfig,
     state: dict[str, Any],
@@ -543,7 +529,12 @@ def _execute_exit(
                     wallet,
                     pool.base_decimals,
                 )
-                token_bal = _position_sell_tokens(pos, cfg, wallet_bal)
+                token_bal = position_sell_tokens(
+                    pos,
+                    wallet_bal,
+                    fallback_size_usd=size_usd,
+                    fallback_price_usd=exit_price,
+                )
                 if token_bal <= 0:
                     out.print(
                         f"[yellow]No on-chain balance[/] for {label} — "

@@ -9,7 +9,6 @@ from bds_agent.evm_swap import get_erc20_balance_human, get_token_balances_human
 from bds_agent.positions import (
     add_position,
     find_position,
-    has_open_pool,
     is_paper_position,
     new_position_record,
     normalize_trader_state,
@@ -46,6 +45,7 @@ def _refresh_balances(
     base_token: str,
     base_decimals: int,
 ) -> dict[str, Any]:
+    """Best-effort wallet snapshot; callers must persist state before this runs."""
     if not rpc_url or not wallet:
         return state
     usdc_bal, weth_bal = get_token_balances_human(rpc_url, wallet)
@@ -126,8 +126,13 @@ def _record_guard_entry(
     private_key: str | None,
 ) -> None:
     state = normalize_trader_state(load_trader_state(profile))
-    if has_open_pool(state, pool.address):
-        return
+    existing = find_position(state, pool.address)
+    is_live_fill = not dry_run and not result.get("dry_run")
+    if existing is not None:
+        if is_live_fill and is_paper_position(existing):
+            state = remove_position(state, pool.address)
+        else:
+            return
     fill_px = float(result.get("price_usd") or price or 0)
     if action in ("reentry_buy_dip", "reentry_buy_breakout"):
         entry_px = fill_px or float(guard_state.get("reference_entry_usd") or 0)
@@ -142,13 +147,8 @@ def _record_guard_entry(
     ts = utc_now_iso()
     wallet = _wallet_address(private_key)
     token_bal = 0.0
-    if rpc_url and wallet and not dry_run:
-        token_bal = get_erc20_balance_human(
-            rpc_url,
-            pool.base_token,
-            wallet,
-            pool.base_decimals,
-        )
+    if is_live_fill and entry_px > 0:
+        token_bal = spent / entry_px
     pos = new_position_record(
         pool,
         price=entry_px,
@@ -160,13 +160,6 @@ def _record_guard_entry(
         timestamp=ts,
     )
     state = add_position(state, pos)
-    state = _refresh_balances(
-        state,
-        rpc_url=rpc_url,
-        wallet=wallet,
-        base_token=pool.base_token,
-        base_decimals=pool.base_decimals,
-    )
     save_trader_state(state, profile)
     append_trade(
         {
@@ -184,6 +177,27 @@ def _record_guard_entry(
         },
         profile,
     )
+    if rpc_url and wallet and is_live_fill:
+        try:
+            on_chain = get_erc20_balance_human(
+                rpc_url,
+                pool.base_token,
+                wallet,
+                pool.base_decimals,
+            )
+            live = find_position(state, pool.address)
+            if live is not None and on_chain > 0:
+                live["token_balance"] = on_chain
+            state = _refresh_balances(
+                state,
+                rpc_url=rpc_url,
+                wallet=wallet,
+                base_token=pool.base_token,
+                base_decimals=pool.base_decimals,
+            )
+            save_trader_state(state, profile)
+        except Exception:
+            pass
 
 
 def _record_guard_exit(
@@ -237,11 +251,15 @@ def _record_guard_exit(
         if dry_run and not is_paper_position(pos):
             return
         state = remove_position(state, pool.address)
-        state = _refresh_balances(
-            state,
-            rpc_url=rpc_url,
-            wallet=wallet,
-            base_token=pool.base_token,
-            base_decimals=pool.base_decimals,
-        )
         save_trader_state(state, profile)
+        try:
+            state = _refresh_balances(
+                state,
+                rpc_url=rpc_url,
+                wallet=wallet,
+                base_token=pool.base_token,
+                base_decimals=pool.base_decimals,
+            )
+            save_trader_state(state, profile)
+        except Exception:
+            pass
