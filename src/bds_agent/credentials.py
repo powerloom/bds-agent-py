@@ -13,6 +13,7 @@ from bds_agent.paths import (
     profiles_dir,
     sanitize_profile_name,
     tempo_env_path_for_profile,
+    trade_env_path_for_profile,
 )
 
 _cli_profile: ContextVar[str | None] = ContextVar("cli_profile", default=None)
@@ -111,11 +112,19 @@ def resolve_tempo_env_path() -> Path | None:
 
 
 def resolve_evm_env_path() -> Path | None:
-    """Per-profile generic EVM file: profiles/<name>.evm.env; None if no profile is selected."""
+    """Per-profile billing EVM file: profiles/<name>.evm.env; None if no profile is selected."""
     n = resolve_profile_name()
     if not n:
         return None
     return evm_env_path_for_profile(n)
+
+
+def resolve_trade_env_path() -> Path | None:
+    """Per-profile trading EVM file: profiles/<name>.trade.env; None if no profile is selected."""
+    n = resolve_profile_name()
+    if not n:
+        return None
+    return trade_env_path_for_profile(n)
 
 
 def describe_credentials_location() -> str:

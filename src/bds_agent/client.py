@@ -16,6 +16,8 @@ from urllib.parse import urlencode
 import httpx
 
 CREDIT_BALANCE_HEADER = "X-BDS-Credit-Balance"
+CLIENT_SOURCE_HEADER = "X-BDS-Client-Source"
+CLIENT_SOURCE_CLI = "cli"
 
 
 @dataclass(frozen=True)
@@ -50,7 +52,10 @@ def _credit_balance_from_headers(headers: httpx.Headers) -> int | None:
 
 
 def _bearer_headers(api_key: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {api_key}"}
+    return {
+        "Authorization": f"Bearer {api_key}",
+        CLIENT_SOURCE_HEADER: CLIENT_SOURCE_CLI,
+    }
 
 
 def _join_url(base_url: str, endpoint: str, query: dict[str, Any] | None) -> str:
@@ -137,13 +142,20 @@ async def stream(
             continue
         except asyncio.CancelledError:
             raise
+        except GeneratorExit:
+            raise
+        except BdsClientError:
+            raise
         except Exception:
             if not reconnect:
                 raise
             failures += 1
             if max_reconnects and failures >= max_reconnects:
                 raise
-            await asyncio.sleep(reconnect_delay)
+            try:
+                await asyncio.sleep(reconnect_delay)
+            except asyncio.CancelledError:
+                raise
 
 
 async def _stream_single_connection(

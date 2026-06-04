@@ -12,6 +12,21 @@ class SignupError(Exception):
 
 
 DEFAULT_SIGNUP_BASE_URL = "https://bds-metering.powerloom.io"
+DEFAULT_METERING_UI_PATH = "/metering"
+
+
+def metering_ui_url(base: str | None = None) -> str:
+    """Browser billing UI (human top-up). API calls use the origin without this path."""
+    origin = (base or default_signup_base_url() or DEFAULT_SIGNUP_BASE_URL).rstrip("/")
+    return f"{origin}{DEFAULT_METERING_UI_PATH}"
+
+
+def credits_exhausted_hint() -> str:
+    """402 / zero-credit guidance: UI for operators, CLI for programmatic top-up."""
+    return (
+        f"BDS credits exhausted (HTTP 402) — add credits at {metering_ui_url()} "
+        "or run `bds-agent credits topup`"
+    )
 
 
 def default_signup_base_url() -> str | None:

@@ -1,0 +1,12 @@
+# Install: uv sync && uv run pre-commit install
+# Run all hooks: uv run pre-commit run --all-files
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check-fix
+        name: ruff check (fix, src/bds_agent)
+        entry: uv run ruff check --fix --unsafe-fixes src/bds_agent/
+        language: system
+        pass_filenames: false
+        files: ^src/bds_agent/

@@ -9,6 +9,7 @@ import pytest
 from eth_abi import encode
 from pydantic import ValidationError
 
+from bds_agent import defaults
 from bds_agent.config import AgentConfig, AuthConfig, SourceConfig
 from bds_agent.verify import (
     VerifyError,
@@ -39,8 +40,8 @@ def test_parse_verification_ok() -> None:
                 "cid": "QmX",
                 "epochId": 5,
                 "projectId": "proj:1",
-                "protocolState": "0x1d0e010Ff11b781CA1dE34BD25a0037203e25E2a",
-                "dataMarket": "0x26c44e5CcEB7Fe69Cffc933838CF40286b2dc01a",
+                "protocolState": defaults.DEFAULT_POWERLOOM_PROTOCOL_STATE,
+                "dataMarket": defaults.DEFAULT_POWERLOOM_DATA_MARKET,
             },
         },
     )
@@ -83,7 +84,7 @@ def test_resolve_verify_data_market_precedence(monkeypatch: pytest.MonkeyPatch) 
         cid="x",
         epoch_id=1,
         project_id="p",
-        protocol_state="0x1d0e010Ff11b781CA1dE34BD25a0037203e25E2a",
+        protocol_state=defaults.DEFAULT_POWERLOOM_PROTOCOL_STATE,
         data_market="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
     cfg = _minimal_agent(verify_data_market="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
@@ -113,8 +114,8 @@ async def _verify_cid_with_mock_client(*, match_cid: str, stream_cid: str) -> No
         cid=stream_cid,
         epoch_id=1,
         project_id="allTradesSnapshot:0xabc:ns",
-        protocol_state="0x1d0e010Ff11b781CA1dE34BD25a0037203e25E2a",
-        data_market="0x26c44e5CcEB7Fe69Cffc933838CF40286b2dc01a",
+        protocol_state=defaults.DEFAULT_POWERLOOM_PROTOCOL_STATE,
+        data_market=defaults.DEFAULT_POWERLOOM_DATA_MARKET,
     )
     r = await verify_cid(
         vp,
@@ -149,8 +150,8 @@ def test_verify_cid_rpc_error() -> None:
         cid="x",
         epoch_id=1,
         project_id="p",
-        protocol_state="0x1d0e010Ff11b781CA1dE34BD25a0037203e25E2a",
-        data_market="0x26c44e5CcEB7Fe69Cffc933838CF40286b2dc01a",
+        protocol_state=defaults.DEFAULT_POWERLOOM_PROTOCOL_STATE,
+        data_market=defaults.DEFAULT_POWERLOOM_DATA_MARKET,
     )
 
     async def run() -> None:
@@ -169,8 +170,8 @@ def test_agent_config_accepts_verify_options() -> None:
     cfg = _minimal_agent(
         verify=True,
         verify_rpc_url="http://rpc.example",
-        verify_protocol_state="0x1d0e010Ff11b781CA1dE34BD25a0037203e25E2a",
-        verify_data_market="0x26c44e5CcEB7Fe69Cffc933838CF40286b2dc01a",
+        verify_protocol_state=defaults.DEFAULT_POWERLOOM_PROTOCOL_STATE,
+        verify_data_market=defaults.DEFAULT_POWERLOOM_DATA_MARKET,
     )
     assert cfg.verify_rpc_url == "http://rpc.example"
     assert cfg.verify_protocol_state is not None
@@ -193,6 +194,27 @@ def test_resolve_rpc_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("POWERLOOM_RPC_URL", "http://rpc-env")
     cfg = _minimal_agent()
     assert resolve_verify_rpc_url(cfg) == "http://rpc-env"
+
+
+def test_resolve_verify_alpha_defaults_without_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bds_agent.verify import VerificationPayload
+
+    monkeypatch.delenv("POWERLOOM_PROTOCOL_STATE", raising=False)
+    monkeypatch.delenv("POWERLOOM_DATA_MARKET", raising=False)
+    monkeypatch.delenv("POWERLOOM_RPC_URL", raising=False)
+    vp = VerificationPayload(
+        cid="x",
+        epoch_id=1,
+        project_id="baseSnapshot:0xpool:mainnet-BDS_MAINNET_ALPHA_UNISWAPV3-ETH",
+        protocol_state="",
+        data_market="",
+    )
+    cfg = _minimal_agent()
+    assert resolve_verify_protocol_state(cfg, vp) == defaults.DEFAULT_POWERLOOM_PROTOCOL_STATE
+    assert resolve_verify_data_market(cfg, vp) == defaults.DEFAULT_POWERLOOM_DATA_MARKET
+    assert resolve_verify_rpc_url(cfg) == defaults.DEFAULT_POWERLOOM_RPC_URL
 
 
 def test_resolve_rpc_from_profile_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -11,7 +11,8 @@ import httpx
 import typer
 from eth_account import Account
 from rich import print as rprint
-
+from bds_agent.trade import TraderConfig
+from bds_agent.pulse import PulseThresholds
 from bds_agent import __version__
 from bds_agent.credentials import (
     OPTIONAL_PROFILE_BDS_KEYS,
@@ -21,6 +22,7 @@ from bds_agent.credentials import (
     resolve_evm_env_path,
     resolve_profile_name,
     resolve_tempo_env_path,
+    resolve_trade_env_path,
     save_credentials,
     set_cli_profile,
     update_profile_bds_fields,
@@ -32,6 +34,9 @@ from bds_agent.credits_api import (
     credits_plans,
     credits_topup,
     credits_topup_onchain,
+    credits_usage,
+    credits_usage_by_endpoint,
+    credits_usage_summary,
 )
 from bds_agent.paths import default_profile_slug, sanitize_profile_name
 from bds_agent.plan_fields import (
@@ -50,6 +55,9 @@ from bds_agent.signup_api import SignupError, default_signup_base_url, initiate_
 from bds_agent.signup_pay_api import signup_pay_claim, signup_pay_quote
 from bds_agent.console_ui import (
     print_balance,
+    print_usage_by_endpoint,
+    print_usage_recent,
+    print_usage_summary,
     print_config_init_skip,
     print_config_init_success,
     print_config_show,
@@ -70,6 +78,7 @@ from bds_agent.console_ui import (
     signup_waiting_status,
 )
 from bds_agent.tempo_config import write_tempo_env_file
+from bds_agent.trade_config import write_trade_env_file
 from bds_agent.tempo_topup import load_tempo_env_file, run_tempo_topup_sync
 
 app = typer.Typer(
@@ -77,16 +86,29 @@ app = typer.Typer(
     help="Build and run agents on Powerloom BDS data markets.",
     no_args_is_help=True,
     add_completion=False,
+    pretty_exceptions_show_locals=False,
 )
 
 credits_app = typer.Typer(help="Credit balance and top-up.")
 app.add_typer(credits_app, name="credits")
+
+usage_app = typer.Typer(help="Credit usage history and endpoint breakdown.")
+credits_app.add_typer(usage_app, name="usage")
 
 llm_app = typer.Typer(help="LLM backends for query/create (Anthropic Messages API, OpenAI, Ollama).")
 app.add_typer(llm_app, name="llm")
 
 config_app = typer.Typer(help="Store BDS defaults in the profile JSON (optional; reduces shell exports).")
 app.add_typer(config_app, name="config")
+
+trade_app = typer.Typer(help="Self-contained Pulse trader (BDS stream → Uniswap V3).")
+app.add_typer(trade_app, name="trade")
+
+prices_app = typer.Typer(help="USD Price Feed — GET /mpp/tokenPrices/ (premium).")
+app.add_typer(prices_app, name="prices")
+
+guard_app = typer.Typer(help="Threshold Guard — bracket trades on BDS USD prices.")
+app.add_typer(guard_app, name="guard")
 
 _PROFILE_OPTION_HELP = (
     "Profile label: names the credentials JSON and per-profile wallet files (~/.config/bds-agent/profiles/<name>.*). "
@@ -1138,6 +1160,111 @@ def credits_balance_cmd(
     print_balance(data)
 
 
+@usage_app.callback(invoke_without_command=True)
+def credits_usage_root(
+    ctx: typer.Context,
+    profile: ProfileCliOption = None,
+    base_url: Optional[str] = typer.Option(
+        None,
+        "--base-url",
+        help="Signup service URL (default: saved signup or BDS_AGENT_SIGNUP_URL)",
+    ),
+    limit: int = typer.Option(100, "--limit", min=1, max=500, help="Max ledger rows"),
+) -> None:
+    """Show recent credit transactions (default when no subcommand)."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _apply_profile_option(profile)
+    creds = load_credentials()
+    if not creds:
+        print_error(
+            f"No credentials found. Run  bds-agent signup  first. ({describe_credentials_location()})",
+        )
+        raise typer.Exit(1)
+    base, _src = _resolve_api_base(base_url)
+    if not base:
+        print_error(
+            "Set --base-url or BDS_AGENT_SIGNUP_URL, or run signup so the service URL is saved.",
+        )
+        raise typer.Exit(1)
+    try:
+        data = credits_usage(base, creds["api_key"], limit=limit)
+    except CreditsError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+    print_usage_recent(data)
+
+
+@usage_app.command("summary")
+def credits_usage_summary_cmd(
+    profile: ProfileCliOption = None,
+    base_url: Optional[str] = typer.Option(
+        None,
+        "--base-url",
+        help="Signup service URL (default: saved signup or BDS_AGENT_SIGNUP_URL)",
+    ),
+    days: int = typer.Option(30, "--days", min=1, max=90, help="Rolling window in days"),
+) -> None:
+    """Daily totals and per-endpoint credit usage."""
+    _apply_profile_option(profile)
+    creds = load_credentials()
+    if not creds:
+        print_error(
+            f"No credentials found. Run  bds-agent signup  first. ({describe_credentials_location()})",
+        )
+        raise typer.Exit(1)
+    base, _src = _resolve_api_base(base_url)
+    if not base:
+        print_error(
+            "Set --base-url or BDS_AGENT_SIGNUP_URL, or run signup so the service URL is saved.",
+        )
+        raise typer.Exit(1)
+    try:
+        data = credits_usage_summary(base, creds["api_key"], days=days)
+    except CreditsError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+    print_usage_summary(data)
+
+
+@usage_app.command("by-endpoint")
+def credits_usage_by_endpoint_cmd(
+    profile: ProfileCliOption = None,
+    base_url: Optional[str] = typer.Option(
+        None,
+        "--base-url",
+        help="Signup service URL (default: saved signup or BDS_AGENT_SIGNUP_URL)",
+    ),
+    days: int = typer.Option(30, "--days", min=1, max=90, help="Rolling window in days"),
+    limit: int = typer.Option(50, "--limit", min=1, max=200, help="Max endpoint rows"),
+) -> None:
+    """Per-endpoint credit usage rollup (route, method, calls, credits)."""
+    _apply_profile_option(profile)
+    creds = load_credentials()
+    if not creds:
+        print_error(
+            f"No credentials found. Run  bds-agent signup  first. ({describe_credentials_location()})",
+        )
+        raise typer.Exit(1)
+    base, _src = _resolve_api_base(base_url)
+    if not base:
+        print_error(
+            "Set --base-url or BDS_AGENT_SIGNUP_URL, or run signup so the service URL is saved.",
+        )
+        raise typer.Exit(1)
+    try:
+        data = credits_usage_by_endpoint(
+            base,
+            creds["api_key"],
+            days=days,
+            limit=limit,
+        )
+    except CreditsError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+    print_usage_by_endpoint(data)
+
+
 @credits_app.command("topup")
 def credits_topup_cmd(
     profile: ProfileCliOption = None,
@@ -1426,7 +1553,752 @@ def llm_ping_cmd(
         raise typer.Exit(1) from exc
 
 
+def _normalize_price_source(price_source: str) -> str:
+    src = price_source.strip().lower()
+    if src not in ("usd", "trades"):
+        raise ValueError(
+            f"--price-source must be 'usd' or 'trades', got {price_source!r}",
+        )
+    return src
+
+
+def _trade_thresholds(
+    
+    price_move: float,
+    volume_burst: float,
+    flow_imbalance: float,
+    window_minutes: float,
+    signal_cooldown_minutes: float,
+    price_source: str = "trades",
+) -> PulseThresholds:
+    src = _normalize_price_source(price_source)
+
+    return PulseThresholds(
+        price_move_pct=price_move,
+        volume_burst_mult=volume_burst,
+        flow_imbalance_pct=flow_imbalance,
+        window_seconds=int(window_minutes * 60),
+        cooldown_seconds=max(0, int(signal_cooldown_minutes * 60)),
+        price_source=src,  # type: ignore[arg-type]
+    )
+
+
+def _trade_config(
+    *,
+    pair: str,
+    size: float,
+    slippage: float,
+    dry_run: bool,
+    profile: Optional[str],
+    price_move: float,
+    volume_burst: float,
+    flow_imbalance: float,
+    window_minutes: float,
+    reentry_cooldown_minutes: float,
+    signal_cooldown_minutes: float,
+    daily_loss_limit: float,
+    max_open_positions: int = 1,
+    exit_signal_reversal: bool,
+    exit_time_based: bool,
+    exit_hold_minutes: float,
+    exit_trailing_stop: bool,
+    exit_trailing_pct: float,
+    exit_take_profit: bool,
+    exit_take_profit_pct: float,
+    exit_stop_loss: bool,
+    exit_stop_loss_pct: float,
+    verbose: bool = False,
+    multi_pool: bool = False,
+    active_pool_limit: int = 30,
+    active_interval_seconds: int = 300,
+    price_source: str = "trades",
+    block_long_on_down_move: bool = True,
+) -> TraderConfig:
+    from bds_agent.exit_strategies import ExitConfig
+    from bds_agent.trade import TraderConfig
+
+    price_src = _normalize_price_source(price_source)
+
+    return TraderConfig(
+        pair=pair,
+        size_usd=size,
+        slippage=slippage,
+        dry_run=dry_run,
+        profile=profile,
+        thresholds=_trade_thresholds(
+            price_move,
+            volume_burst,
+            flow_imbalance,
+            window_minutes,
+            signal_cooldown_minutes,
+            price_src,
+        ),
+        reentry_cooldown_minutes=max(0.0, reentry_cooldown_minutes),
+        max_open_positions=max(1, max_open_positions),
+        exit=ExitConfig(
+            signal_reversal=exit_signal_reversal,
+            time_based=exit_time_based,
+            hold_minutes=exit_hold_minutes,
+            trailing_stop=exit_trailing_stop,
+            trailing_pct=exit_trailing_pct,
+            take_profit=exit_take_profit,
+            take_profit_pct=exit_take_profit_pct,
+            stop_loss=exit_stop_loss,
+            stop_loss_pct=exit_stop_loss_pct,
+        ),
+        daily_loss_limit_usd=daily_loss_limit,
+        verbose=verbose,
+        multi_pool=multi_pool,
+        active_pool_limit=active_pool_limit,
+        active_interval_seconds=active_interval_seconds,
+        price_source=price_src,
+        block_long_on_down_move=block_long_on_down_move,
+    )
+
+
+@trade_app.command("setup-evm")
+def trade_setup_evm_cmd(
+    profile: ProfileCliOption = None,
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite existing .trade.env without asking",
+    ),
+) -> None:
+    """Save a dedicated trading wallet to profiles/<profile>.trade.env (separate from billing .evm.env)."""
+    _apply_profile_option(profile)
+    _ensure_profile_name_for_wallet(default_suggestion="default")
+    path = resolve_trade_env_path()
+    if path is None:
+        print_error("Could not resolve trade wallet path (internal).")
+        raise typer.Exit(1)
+    if path.is_file() and not force:
+        if _stdin_is_tty():
+            if not typer.confirm(f"{path} already exists. Overwrite?", default=False):
+                raise typer.Exit(0)
+        else:
+            print_error(f"{path} exists. Use --force to overwrite.")
+            raise typer.Exit(1)
+    pname = resolve_profile_name() or "profile"
+    rprint(
+        f"Trading wallet for [cyan]bds-agent trade[/] only — not used for signup-pay or credit top-up. "
+        f"Billing wallet: [cyan]credits setup-evm[/] → profiles/<name>.evm.env. "
+        f"Same profile API key ([cyan]{pname}.json[/]) for BDS stream + billing. "
+        f"Profile [cyan]{pname}[/] → {path}",
+    )
+    key = typer.prompt("TRADE_EVM private key (hex)", hide_input=True)
+    if not key or not str(key).strip():
+        print_error("No key entered.")
+        raise typer.Exit(1)
+    rpc = typer.prompt(
+        "TRADE_EVM_RPC_URL (Ethereum mainnet for USDC-WETH)",
+        default="",
+        show_default=False,
+    ).strip()
+    if not rpc:
+        print_error("TRADE_EVM_RPC_URL is required for live trading.")
+        raise typer.Exit(1)
+    chain = typer.prompt(
+        "TRADE_EVM chain ID",
+        default="1",
+        show_default=True,
+    ).strip() or "1"
+    out = write_trade_env_file(
+        str(key).strip(),
+        rpc_url=rpc,
+        chain_id=chain,
+        path=path,
+    )
+    rprint(f"[green]Saved[/] {out}")
+
+
+@trade_app.command("run")
+def trade_run_cmd(
+    profile: ProfileCliOption = None,
+    pair: str = typer.Option("USDC-WETH", "--pair", help="Trading pair."),
+    size: float = typer.Option(25.0, "--size", help="Trade size in USD."),
+    slippage: float = typer.Option(0.005, "--slippage", help="Max slippage (0.005 = 0.5%)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Log signals without executing swaps."),
+    price_move: float = typer.Option(0.15, "--price-move", help="Min price move % (5 min window)."),
+    volume_burst: float = typer.Option(2.0, "--volume-burst", help="Min volume burst multiplier."),
+    flow_imbalance: float = typer.Option(30.0, "--flow-imbalance", help="Min flow imbalance %."),
+    window_minutes: float = typer.Option(5.0, "--window-minutes", help="Signal window in minutes."),
+    reentry_cooldown_minutes: float = typer.Option(
+        0.0,
+        "--reentry-cooldown-minutes",
+        help="After a live exit, block new entries for N minutes (0 = off).",
+    ),
+    signal_cooldown_minutes: float = typer.Option(
+        0.0,
+        "--signal-cooldown-minutes",
+        help="Per pool, suppress repeat LONG signals for N minutes after a fire (0 = off).",
+    ),
+    max_open_positions: int = typer.Option(
+        0,
+        "--max-open-positions",
+        min=0,
+        help="Max concurrent LONG positions (one per pool). 0 = auto (5 with --multi-pool, else 1).",
+    ),
+    daily_loss_limit: float = typer.Option(
+        50.0,
+        "--daily-loss-limit",
+        help="Stop new entries if today's realized P/L (UTC) is below -$N.",
+    ),
+    exit_signal_reversal: bool = typer.Option(
+        True,
+        "--exit-signal-reversal/--no-exit-signal-reversal",
+        help="Exit when Pulse fires SHORT.",
+    ),
+    exit_time_based: bool = typer.Option(
+        True,
+        "--exit-time-based/--no-exit-time-based",
+        help="Exit after holding N minutes.",
+    ),
+    exit_hold_minutes: float = typer.Option(
+        10.0,
+        "--exit-hold-minutes",
+        help="Max hold time when --exit-time-based is on.",
+    ),
+    exit_trailing_stop: bool = typer.Option(
+        True,
+        "--exit-trailing-stop/--no-exit-trailing-stop",
+        help="Exit if price falls X% from the peak since entry.",
+    ),
+    exit_trailing_pct: float = typer.Option(
+        2.0,
+        "--exit-trailing-pct",
+        help="Trailing stop distance from peak (%).",
+    ),
+    exit_take_profit: bool = typer.Option(
+        True,
+        "--exit-take-profit/--no-exit-take-profit",
+        help="Exit when unrealized gain reaches target %.",
+    ),
+    exit_take_profit_pct: float = typer.Option(
+        1.0,
+        "--exit-take-profit-pct",
+        help="Take-profit target above entry (%).",
+    ),
+    exit_stop_loss: bool = typer.Option(
+        True,
+        "--exit-stop-loss/--no-exit-stop-loss",
+        help="Exit when unrealized loss reaches limit %.",
+    ),
+    exit_stop_loss_pct: float = typer.Option(
+        2.0,
+        "--exit-stop-loss-pct",
+        help="Stop-loss distance below entry (%). See docs/TRADE.md.",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Per-epoch heartbeat: confluence gates, position, exit checks, entry blocks.",
+    ),
+    multi_pool: bool = typer.Option(
+        False,
+        "--multi-pool",
+        help="Watch top USDC-quoted pools from dailyActivePools; pick best LONG each epoch.",
+    ),
+    active_pool_limit: int = typer.Option(
+        40,
+        "--active-pool-limit",
+        help="Max USDC pools to watch (from dailyActivePools).",
+    ),
+    active_interval: int = typer.Option(
+        300,
+        "--active-interval",
+        help="dailyActivePools time_interval seconds (default 5m, matches Pulse window).",
+    ),
+    price_source: str = typer.Option(
+        "usd",
+        "--price-source",
+        help="Price gate source: usd (/tokenPrices/) or trades (swap-implied).",
+    ),
+    block_long_on_down_move: bool = typer.Option(
+        True,
+        "--block-long-on-down-move/--no-block-long-on-down-move",
+        help="Skip LONG entry when 5m spot move (px) is negative.",
+    ),
+) -> None:
+    """Stream BDS epochs, detect Pulse confluence, execute Uniswap V3 swaps."""
+    _apply_profile_option(profile)
+    from bds_agent.trade import run_trader_sync
+
+    resolved_max = max_open_positions if max_open_positions > 0 else (5 if multi_pool else 1)
+
+    try:
+        cfg = _trade_config(
+            pair=pair,
+            size=size,
+            slippage=slippage,
+            dry_run=dry_run,
+            profile=profile,
+            price_move=price_move,
+            volume_burst=volume_burst,
+            flow_imbalance=flow_imbalance,
+            window_minutes=window_minutes,
+            reentry_cooldown_minutes=reentry_cooldown_minutes,
+            signal_cooldown_minutes=signal_cooldown_minutes,
+            max_open_positions=resolved_max,
+            daily_loss_limit=daily_loss_limit,
+            exit_signal_reversal=exit_signal_reversal,
+            exit_time_based=exit_time_based,
+            exit_hold_minutes=exit_hold_minutes,
+            exit_trailing_stop=exit_trailing_stop,
+            exit_trailing_pct=exit_trailing_pct,
+            exit_take_profit=exit_take_profit,
+            exit_take_profit_pct=exit_take_profit_pct,
+            exit_stop_loss=exit_stop_loss,
+            exit_stop_loss_pct=exit_stop_loss_pct,
+            verbose=verbose,
+            multi_pool=multi_pool,
+            active_pool_limit=active_pool_limit,
+            active_interval_seconds=active_interval,
+            price_source=price_source,
+            block_long_on_down_move=block_long_on_down_move,
+        )
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+    from bds_agent.secrets import redact_secrets
+
+    try:
+        run_trader_sync(cfg)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        raise typer.Exit(130) from None
+    except RuntimeError as exc:
+        print_error(redact_secrets(str(exc)))
+        raise typer.Exit(1) from exc
+    except Exception as exc:
+        print_error(redact_secrets(str(exc)))
+        raise typer.Exit(1) from exc
+
+
+@trade_app.command("status")
+def trade_status_cmd(profile: ProfileCliOption = None) -> None:
+    """Show current trader position state."""
+    _apply_profile_option(profile)
+    from bds_agent.trade import show_status
+
+    try:
+        show_status(profile)
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@trade_app.command("history")
+def trade_history_cmd(profile: ProfileCliOption = None) -> None:
+    """Show append-only trade log."""
+    _apply_profile_option(profile)
+    from bds_agent.trade import show_history
+
+    try:
+        show_history(profile)
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@trade_app.command("pnl")
+def trade_pnl_cmd(profile: ProfileCliOption = None) -> None:
+    """Summarize P/L from trade log."""
+    _apply_profile_option(profile)
+    from bds_agent.trade import show_pnl
+
+    try:
+        show_pnl(profile)
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@trade_app.command("reconcile")
+def trade_reconcile_cmd(
+    profile: ProfileCliOption = None,
+    pool: Optional[str] = typer.Option(
+        None,
+        "--pool",
+        help="Reconcile only this pool address (default: all open).",
+    ),
+) -> None:
+    """Remove trader state rows with zero on-chain token balance (after manual exits)."""
+    _apply_profile_option(profile)
+    from bds_agent.trade import reconcile_positions
+
+    cfg = _trade_config(
+        pair="USDC-WETH",
+        size=15.0,
+        slippage=0.005,
+        dry_run=False,
+        profile=profile,
+        price_move=0.15,
+        volume_burst=2.0,
+        flow_imbalance=30.0,
+        window_minutes=5.0,
+        reentry_cooldown_minutes=0.0,
+        signal_cooldown_minutes=0.0,
+        max_open_positions=5,
+        daily_loss_limit=50.0,
+        exit_signal_reversal=True,
+        exit_time_based=True,
+        exit_hold_minutes=10.0,
+        exit_trailing_stop=True,
+        exit_trailing_pct=2.0,
+        exit_take_profit=True,
+        exit_take_profit_pct=1.0,
+        exit_stop_loss=True,
+        exit_stop_loss_pct=2.0,
+    )
+    try:
+        reconcile_positions(cfg, pool=pool)
+    except (RuntimeError, ValueError) as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@trade_app.command("exit")
+def trade_exit_cmd(
+    profile: ProfileCliOption = None,
+    pool: Optional[str] = typer.Option(
+        None,
+        "--pool",
+        help="Close only this pool address (default: all open positions).",
+    ),
+    pair: str = typer.Option("USDC-WETH", "--pair", help="Trading pair (for config consistency)."),
+    size: float = typer.Option(25.0, "--size", help="Default size (used if state has none)."),
+    slippage: float = typer.Option(0.005, "--slippage", help="Max slippage."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print exit intent without swapping."),
+) -> None:
+    """Force-close an open LONG position."""
+    _apply_profile_option(profile)
+    from bds_agent.trade import force_exit
+
+    cfg = _trade_config(
+        pair=pair,
+        size=size,
+        slippage=slippage,
+        dry_run=dry_run,
+        profile=profile,
+        price_move=0.25,
+        volume_burst=2.0,
+        flow_imbalance=30.0,
+        window_minutes=5.0,
+        reentry_cooldown_minutes=0.0,
+        signal_cooldown_minutes=0.0,
+        max_open_positions=1,
+        daily_loss_limit=50.0,
+        exit_signal_reversal=True,
+        exit_time_based=True,
+        exit_hold_minutes=10.0,
+        exit_trailing_stop=True,
+        exit_trailing_pct=2.0,
+        exit_take_profit=True,
+        exit_take_profit_pct=5.0,
+        exit_stop_loss=True,
+        exit_stop_loss_pct=2.0,
+    )
+    try:
+        force_exit(cfg, pool=pool)
+    except RuntimeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@prices_app.command("at")
+def prices_at_cmd(
+    token: str = typer.Argument(..., help="ERC-20 token address (base token in pool)."),
+    pool: str = typer.Option(..., "--pool", help="Uniswap V3 pool address."),
+    block: Optional[int] = typer.Option(
+        None,
+        "--block",
+        help="Block number (default: latest finalized epoch block).",
+    ),
+    profile: ProfileCliOption = None,
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Spot USD price for one token in one pool (premium ``/mpp/token/price/``)."""
+    _apply_profile_option(profile)
+    from bds_agent.prices_cmd import fetch_pool_price, format_prices_output
+
+    try:
+        data = fetch_pool_price(profile=profile, token=token, pool=pool, block=block)
+    except RuntimeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+    typer.echo(format_prices_output(data, as_json=json_out))
+
+
+@prices_app.command("token")
+def prices_token_cmd(
+    token: str = typer.Argument(..., help="ERC-20 token address."),
+    block: Optional[int] = typer.Option(
+        None,
+        "--block",
+        help="Block number (default: latest finalized epoch block).",
+    ),
+    profile: ProfileCliOption = None,
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """USD prices for a token across all indexed pools."""
+    _apply_profile_option(profile)
+    from bds_agent.prices_cmd import fetch_token_prices, format_prices_output
+
+    try:
+        data = fetch_token_prices(profile=profile, token=token, block=block)
+    except RuntimeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+    typer.echo(format_prices_output(data, as_json=json_out))
+
+
+@guard_app.command("run")
+def guard_run_cmd(
+    pool: Optional[str] = typer.Option(
+        None,
+        "--pool",
+        help="USDC-quoted Uniswap V3 pool (required on first run; then optional from .guard.json).",
+    ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        help="Base token address (non-USDC leg). Pins GET /mpp/token/price/{token}/{pool}; "
+        "validated against pool metadata.",
+    ),
+    take_profit_pct: Optional[float] = typer.Option(
+        None,
+        "--take-profit-pct",
+        help="Spot mode (default): sell after price rises this fraction above entry (0.03 = +3%%).",
+    ),
+    stop_loss_pct: Optional[float] = typer.Option(
+        None,
+        "--stop-loss-pct",
+        help="Spot mode: sell when price falls this fraction below entry (0.02 = -2%%). Omit for no stop.",
+    ),
+    reentry_retrace_pct: float = typer.Option(
+        0.5,
+        "--reentry-retrace-pct",
+        help="Spot mode: after exit, re-buy after partial giveback (gain) or recovery (loss).",
+    ),
+    threshold_high: Optional[float] = typer.Option(
+        None,
+        "--threshold-high",
+        help="Explicit mode: upper USD band (requires --threshold-low).",
+    ),
+    threshold_low: Optional[float] = typer.Option(
+        None,
+        "--threshold-low",
+        help="Explicit mode: lower USD band (requires --threshold-high).",
+    ),
+    poll: float = typer.Option(15.0, "--poll", help="Poll interval in seconds."),
+    size: float = typer.Option(25.0, "--size", help="USDC notional per buy (--enter / re-entry)."),
+    slippage: float = typer.Option(0.005, "--slippage", help="Max slippage."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Detect crosses without swapping."),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Include full pool address on every tick line (always shown on startup).",
+    ),
+    enter: Optional[bool] = typer.Option(
+        None,
+        "--enter/--no-enter",
+        help="Spot mode: buy at startup (default on). Explicit mode: default off unless --enter.",
+    ),
+    reentry_on_breakout: bool = typer.Option(
+        False,
+        "--reentry-on-breakout",
+        help="Explicit mode only: re-enter on breakout above --threshold-high.",
+    ),
+    max_ticks: int = typer.Option(
+        0,
+        "--max-ticks",
+        help="Exit after N polls (0 = run until interrupted).",
+    ),
+    reserve_max_minutes: float = typer.Option(
+        0.0,
+        "--reserve-max-minutes",
+        help=(
+            "After take-profit/stop, exit guard if still in USDC with no dip "
+            "re-entry for N minutes (0 = wait forever). For composed agents."
+        ),
+    ),
+    profile: ProfileCliOption = None,
+) -> None:
+    """Poll BDS spot USD and bracket trade (spot %% bands by default, or explicit USD thresholds)."""
+    _apply_profile_option(profile)
+    from bds_agent.guard import GuardConfig, run_guard_sync
+
+    cfg = GuardConfig(
+        pool=pool,
+        base_token=token,
+        threshold_high=threshold_high,
+        threshold_low=threshold_low,
+        take_profit_pct=take_profit_pct,
+        stop_loss_pct=stop_loss_pct,
+        reentry_retrace_pct=reentry_retrace_pct,
+        poll_seconds=poll,
+        size_usd=size,
+        slippage=slippage,
+        dry_run=dry_run,
+        profile=profile,
+        max_ticks=max_ticks,
+        verbose=verbose,
+        enter=enter,
+        reentry_on_breakout=reentry_on_breakout,
+        reserve_max_minutes=reserve_max_minutes,
+    )
+    try:
+        run_guard_sync(cfg)
+    except KeyboardInterrupt:
+        raise typer.Exit(130) from None
+    except RuntimeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@guard_app.command("enter")
+def guard_enter_cmd(
+    pool: Optional[str] = typer.Option(
+        None,
+        "--pool",
+        help="USDC-quoted pool (required on first run; else from .guard.json).",
+    ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        help="Base token address (non-USDC leg); validated against pool metadata.",
+    ),
+    size: float = typer.Option(25.0, "--size", help="USDC notional for the entry buy."),
+    slippage: float = typer.Option(0.005, "--slippage", help="Max slippage."),
+    take_profit_pct: Optional[float] = typer.Option(
+        None,
+        "--take-profit-pct",
+        help="Recorded for follow-up guard run (default 0.03).",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Log intent without swapping."),
+    profile: ProfileCliOption = None,
+) -> None:
+    """One-shot USDC → base at BDS spot (same as ``guard run --enter`` without polling)."""
+    _apply_profile_option(profile)
+    from bds_agent.guard import (
+        GuardConfig,
+        Position,
+        _fetch_guard_price_usd,
+        _prepare_guard_pool,
+        _record_spot_reference,
+        _resolve_guard_evm,
+        _sync_guard_config_state,
+        normalize_guard_config,
+        run_initial_entry_if_needed,
+        utc_now_iso,
+    )
+    from bds_agent.guard_state import load_guard_state, save_guard_state
+    from bds_agent.guard_trade_sync import record_guard_fill
+
+    cfg = normalize_guard_config(
+        GuardConfig(
+            pool=pool,
+            base_token=token,
+            size_usd=size,
+            slippage=slippage,
+            dry_run=dry_run,
+            profile=profile,
+            enter=True,
+            take_profit_pct=take_profit_pct,
+        ),
+    )
+    state = load_guard_state(profile)
+    private_key, rpc_url, chain_id = _resolve_guard_evm(cfg)
+    pool_wp, base_token = _prepare_guard_pool(cfg, state, rpc_url=rpc_url)
+    _sync_guard_config_state(
+        state,
+        pool=pool_wp,
+        base_token=base_token,
+        cfg=cfg,
+    )
+    position: Position = (
+        state.get("position")
+        if state.get("position") in ("token", "reserve")
+        else "token"
+    )
+    price = _fetch_guard_price_usd(cfg, pool_wp, base_token=base_token)
+    try:
+        new_pos, result = run_initial_entry_if_needed(
+            cfg,
+            pool_wp,
+            position=position,
+            price=price,
+            rpc_url=rpc_url,
+            private_key=private_key,
+            chain_id=chain_id,
+            allow_reserve_enter=True,
+        )
+    except RuntimeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1) from exc
+    state["position"] = new_pos
+    state["last_action"] = result
+    state["last_price_usd"] = price
+    if price and price > 0 and not (result or {}).get("skipped"):
+        _record_spot_reference(state, action="initial_entry_buy", price=price)
+    if result and not result.get("skipped"):
+        state.pop("fresh_leg", None)
+        record_guard_fill(
+            profile=profile,
+            pool=pool_wp,
+            size_usd=cfg.size_usd,
+            dry_run=cfg.dry_run,
+            guard_state=state,
+            action="initial_entry_buy",
+            result=result,
+            price=price,
+            rpc_url=rpc_url,
+            private_key=private_key,
+        )
+    state["updated_at"] = utc_now_iso()
+    save_guard_state(state, profile)
+    typer.echo(f"enter {result}")
+
+
+@guard_app.command("status")
+def guard_status_cmd(profile: ProfileCliOption = None) -> None:
+    """Show Threshold Guard position state."""
+    _apply_profile_option(profile)
+    from bds_agent.guard import show_guard_status
+
+    show_guard_status(profile)
+
+
+@guard_app.command("reset")
+def guard_reset_cmd(
+    profile: ProfileCliOption = None,
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help="Drop pool/token anchors too (default keeps pool for same market).",
+    ),
+) -> None:
+    """Clear guard cycle state after reserve_idle_timeout (or manual reset)."""
+    _apply_profile_option(profile)
+    from bds_agent.guard_state import reset_guard_state_for_new_leg
+
+    state = reset_guard_state_for_new_leg(profile, keep_pool=not full)
+    pool = state.get("pool_address") or "(none)"
+    typer.echo(
+        f"guard state reset for profile {profile or 'default'} "
+        f"(pool={pool}, position=reserve, fresh_leg=True). "
+        "Cleared reference_entry_usd, last_exit_usd, reserve_since. "
+        "Next: guard run ... --enter",
+    )
+
+
 def main() -> None:
+    from bds_agent.secrets import install_safe_traceback
+
+    install_safe_traceback()
     app()
 
 

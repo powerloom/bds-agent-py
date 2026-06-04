@@ -40,8 +40,23 @@ def tempo_env_path_for_profile(profile_name: str) -> Path:
 
 
 def evm_env_path_for_profile(profile_name: str) -> Path:
-    """Per-profile generic EVM wallet: profiles/<name>.evm.env (for ERC-20 pay flows)."""
+    """Per-profile billing EVM wallet: profiles/<name>.evm.env (signup-pay / on-chain top-up)."""
     return profiles_dir() / f"{sanitize_profile_name(profile_name)}.evm.env"
+
+
+def trade_env_path_for_profile(profile_name: str) -> Path:
+    """Per-profile trading EVM wallet: profiles/<name>.trade.env (Uniswap swaps only)."""
+    return profiles_dir() / f"{sanitize_profile_name(profile_name)}.trade.env"
+
+
+def trader_state_path_for_profile(profile_name: str) -> Path:
+    """Per-profile trader position state: profiles/<name>.trader.json."""
+    return profiles_dir() / f"{sanitize_profile_name(profile_name)}.trader.json"
+
+
+def trades_log_path_for_profile(profile_name: str) -> Path:
+    """Per-profile append-only trade log: profiles/<name>.trades.jsonl."""
+    return profiles_dir() / f"{sanitize_profile_name(profile_name)}.trades.jsonl"
 
 
 def sanitize_profile_name(name: str) -> str:

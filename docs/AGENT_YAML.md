@@ -40,11 +40,13 @@ At least one of:
 
 When **`verify: true`**, the runner reads **`verification`** from each stream event (same object the API documents for BDS clients). Verification uses **`ProtocolState.maxSnapshotsCid(dataMarket, projectId, epochId)`**, which reads the snapshot CID from the given **DataMarket** contract. The JSON-RPC **`eth_call`** targets **ProtocolState**; **DataMarket** is encoded as the first calldata argument. Both addresses must match the deployment you intend (wrong pair ⇒ wrong or empty CID). Checks run **concurrently** with rule evaluation (bounded concurrency); they do not block the rules/sinks pipeline.
 
-**ProtocolState address precedence:** **`verify_protocol_state`** in YAML → **`POWERLOOM_PROTOCOL_STATE`** (env or profile **`powerloom_protocol_state`**) → **`verification.protocolState`** from the stream.
+**ProtocolState address precedence:** **`verify_protocol_state`** in YAML → **`POWERLOOM_PROTOCOL_STATE`** (env or profile **`powerloom_protocol_state`**) → **`verification.protocolState`** from the stream → packaged BDS alpha default (`0xa1100CB00Acd3cA83a7C8F4DAA42701D1Eaf4A6c`, same as **`bds-agent config init`**).
 
-**DataMarket address precedence:** **`verify_data_market`** in YAML → **`POWERLOOM_DATA_MARKET`** (env or profile **`powerloom_data_market`**) → **`verification.dataMarket`** from the stream.
+**DataMarket address precedence:** **`verify_data_market`** in YAML → **`POWERLOOM_DATA_MARKET`** (env or profile **`powerloom_data_market`**) → **`verification.dataMarket`** from the stream → packaged BDS alpha default (`0x4198Bf81B55EE4Af6f9Ddc176F8021960813f641`).
 
-**RPC URL precedence:** **`verify_rpc_url`** in YAML → **`POWERLOOM_RPC_URL`** (env or profile **`powerloom_rpc_url`**).
+**RPC URL precedence:** **`verify_rpc_url`** in YAML → **`POWERLOOM_RPC_URL`** (env or profile **`powerloom_rpc_url`**) → packaged default (`https://rpc-v2.powerloom.network/`).
+
+**Guard / trade / prices** do not use these addresses; only **`run`** with **`verify: true`** does.
 
 If **`verify: true`** but no RPC URL is resolved, the runner prints a one-time warning and skips on-chain checks. If ProtocolState or DataMarket cannot be resolved for an event, the runner logs a warning for that epoch and skips the check.
 

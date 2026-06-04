@@ -14,6 +14,12 @@ Python package and CLI for building agents on **Powerloom BDS** data markets.
 
 **→ [docs/AGENT_YAML.md](docs/AGENT_YAML.md)** — `agent.yaml` schema, **`${VAR}`** interpolation, **`auth`**, optional **`verify`** (on-chain CID vs `maxSnapshotsCid`). Example: **`examples/agent.example.yaml`**.
 
+**→ [docs/TRADE.md](docs/TRADE.md)** — Pulse trader (`bds-agent trade`).
+
+**→ [docs/GUARD.md](docs/GUARD.md)** — Threshold Guard (`bds-agent guard`: spot %% TP/SL, dip re-entry, `--reserve-max-minutes`, trade log sync).
+
+**→ [docs/PRICES.md](docs/PRICES.md)** — USD Price Feed CLI (`bds-agent prices`).
+
 ## Install
 
 Install **[uv](https://docs.astral.sh/uv/)** once (standalone installer or your package manager).
@@ -47,11 +53,14 @@ When the package is published to PyPI, **`uv tool upgrade bds-agent`** upgrades 
 ```bash
 cd bds-agent-py
 uv sync
+uv run pre-commit install   # optional: ruff --fix on commit (src/bds_agent/)
 uv run bds-agent --help
 uv run bds-agent --version
 ```
 
 Use **`uv run bds-agent …`** for every CLI invocation, or install with **`uv tool install .`** when you want a stable **`bds-agent`** on **`PATH`**.
+
+Pre-commit runs **`uv run ruff check --fix --unsafe-fixes src/bds_agent/`** when you change files under **`src/bds_agent/`**. Manual check: same command, or **`uv run pre-commit run --all-files`**.
 
 CLI: **[Typer](https://typer.tiangolo.com/)** + **httpx**.
 
@@ -70,7 +79,7 @@ Environment (many are optional depending on the command):
 
 Full tables and precedence: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** → **API endpoint catalog** and **LLM backends**.
 
-Credentials: **`~/.config/bds-agent/profiles/<profile>.json`** (plus **`active_profile`** after signup). Tempo wallet for **`credits topup`**: **`profiles/<profile>.tempo.env`**. Generic EVM key for **`signup-pay`**: **`profiles/<profile>.evm.env`**. Override with **`--profile`** / **`BDS_AGENT_PROFILE`**.
+Credentials: **`~/.config/bds-agent/profiles/<profile>.json`** (plus **`active_profile`** after signup). Tempo wallet for **`credits topup`**: **`profiles/<profile>.tempo.env`**. Billing EVM for **`signup-pay`**: **`profiles/<profile>.evm.env`**. Trading EVM for **`trade run`**: **`profiles/<profile>.trade.env`**. Override with **`--profile`** / **`BDS_AGENT_PROFILE`**.
 
 If you still have a single **`~/.config/bds-agent/tempo.env`**, move it to **`profiles/<your-profile>.tempo.env`** (or re-run **`credits setup-tempo`**). With no profile selected, the CLI may still read the legacy file as a fallback.
 
@@ -81,9 +90,17 @@ If you still have a single **`~/.config/bds-agent/tempo.env`**, move it to **`pr
 | `bds-agent signup` | Device-auth flow; saves API key locally |
 | `bds-agent signup-pay` | Wallet-funded API key (no browser); see **`docs/USER_GUIDE.md`** |
 | `bds-agent credits balance` | Credit balance and rate limits |
+| `bds-agent credits usage` | Recent credit ledger rows (`route_template`, `http_method`, `request_path`, `client_source`) |
+| `bds-agent credits usage summary` | Daily totals and per-endpoint usage (`--days`) |
+| `bds-agent credits usage by-endpoint` | Endpoint-only rollup (`--days`, `--limit`) |
 | `bds-agent credits setup-evm` | Save generic EVM key for pay-signup / on-chain (non-Tempo) |
 | `bds-agent credits topup` | Billing link when checkout exists; dev `--amount` + `--dev-secret` on staging |
 | `bds-agent run <agent.yaml>` | SSE stream → rules → sinks (see `docs/AGENT_YAML.md`) |
+| `bds-agent trade setup-evm` | Save trading wallet to `profiles/<n>.trade.env` (swaps only) |
+| `bds-agent trade run` | Pulse trader: BDS stream → Uniswap V3 multi-pool (USD price gate); see `docs/TRADE.md` |
+| `bds-agent prices at` / `prices token` | USD spot per pool or all pools (`/mpp/token/price/`, `/mpp/tokenPrices/all/`) |
+| `bds-agent guard run` | Threshold Guard: spot %% bands or explicit USD thresholds; see `docs/GUARD.md` |
+| `bds-agent guard enter` / `guard status` / `guard reset` | One-shot USDC → base; `.guard.json` + `guard_exit_reason`; reset cycle for next leg |
 | `bds-agent query "…"` | NL → endpoint + params (LLM); optional **`--execute`** to call BDS — see **`docs/USER_GUIDE.md`** |
 | `bds-agent create "…"` | NL → **`agent.yaml`** (LLM + validation); **`--output`** / **`-o`** optional — see **`docs/USER_GUIDE.md`** |
 | `bds-agent llm status` / `setup` / `ping` | Configure and test LLM backends (`~/.config/bds-agent/llm.json`) |

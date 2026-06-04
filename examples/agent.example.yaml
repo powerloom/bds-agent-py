@@ -23,8 +23,8 @@ sinks:
 # (needs verify_rpc_url or POWERLOOM_RPC_URL; set both contract addresses or rely on stream verification.*):
 # verify: true
 # verify_rpc_url: ${POWERLOOM_RPC_URL}
-# verify_protocol_state: "0x1d0e010Ff11b781CA1dE34BD25a0037203e25E2a"
-# verify_data_market: "0x26c44e5CcEB7Fe69Cffc933838CF40286b2dc01a"
+# verify_protocol_state: "0xa1100CB00Acd3cA83a7C8F4DAA42701D1Eaf4A6c"
+# verify_data_market: "0x4198Bf81B55EE4Af6f9Ddc176F8021960813f641"
 
 verify: false
 

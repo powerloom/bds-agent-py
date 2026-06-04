@@ -253,6 +253,115 @@ def print_balance(data: dict[str, Any]) -> None:
     c.print()
 
 
+def _endpoint_usage_table(by_endpoint: list[Any]) -> Table:
+    t = Table(title="By endpoint", box=box.SIMPLE)
+    t.add_column("Route", overflow="fold")
+    t.add_column("Method")
+    t.add_column("Calls", justify="right")
+    t.add_column("Credits", justify="right")
+    for row in by_endpoint:
+        if not isinstance(row, dict):
+            continue
+        t.add_row(
+            str(row.get("route_template", "—")),
+            str(row.get("http_method", "—")),
+            str(row.get("call_count", 0)),
+            str(row.get("credits_used", 0)),
+        )
+    return t
+
+
+def print_usage_summary(data: dict[str, Any]) -> None:
+    c = _out()
+    totals = data.get("totals") or {}
+    by_day = data.get("by_day") or []
+    by_endpoint = data.get("by_endpoint") or []
+    window = data.get("window_days", "?")
+
+    c.print()
+    c.print(
+        Panel(
+            f"Window: last {window} days · "
+            f"calls {totals.get('usage_events', 0)} · "
+            f"credits used {totals.get('credits_used', 0)} · "
+            f"credits added {totals.get('credits_added', 0)}",
+            title="[bold bright_cyan]Usage summary[/]",
+            border_style="cyan",
+            box=box.ROUNDED,
+        )
+    )
+
+    if by_endpoint:
+        c.print(_endpoint_usage_table(by_endpoint))
+
+    if by_day:
+        t2 = Table(title="By day", box=box.SIMPLE)
+        t2.add_column("Day")
+        t2.add_column("Calls", justify="right")
+        t2.add_column("Credits", justify="right")
+        for row in by_day[:14]:
+            if not isinstance(row, dict):
+                continue
+            t2.add_row(
+                str(row.get("day", "—")),
+                str(row.get("usage_events", 0)),
+                str(row.get("credits_used", 0)),
+            )
+        c.print(t2)
+    c.print()
+
+
+def print_usage_by_endpoint(data: dict[str, Any]) -> None:
+    c = _out()
+    by_endpoint = data.get("by_endpoint") or []
+    window = data.get("window_days", "?")
+
+    c.print()
+    c.print(
+        Panel(
+            f"Window: last {window} days · endpoints {len(by_endpoint)}",
+            title="[bold bright_cyan]Usage by endpoint[/]",
+            border_style="cyan",
+            box=box.ROUNDED,
+        )
+    )
+    if by_endpoint:
+        c.print(_endpoint_usage_table(by_endpoint))
+    else:
+        c.print("[dim]No metered endpoint usage in this window.[/dim]")
+    c.print()
+
+
+def print_usage_recent(data: dict[str, Any]) -> None:
+    c = _out()
+    rows = data.get("transactions") or []
+    t = Table(title="Recent credit transactions", box=box.SIMPLE)
+    t.add_column("Time")
+    t.add_column("Type")
+    t.add_column("Method")
+    t.add_column("Route", overflow="fold")
+    t.add_column("Path", overflow="fold")
+    t.add_column("Source")
+    t.add_column("Amount", justify="right")
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        route = row.get("route_template") or row.get("description") or "—"
+        created = str(row.get("created_at", "")).replace("T", " ")[:19]
+        t.add_row(
+            created,
+            str(row.get("type", "—")),
+            str(row.get("http_method") or "—"),
+            str(route),
+            str(row.get("request_path") or "—"),
+            str(row.get("client_source") or "—"),
+            str(row.get("amount", 0)),
+        )
+    c.print()
+    c.print(t)
+    c.print()
+
+
 def print_tempo_setup_intro(profile_name: str, dest_path: Path) -> None:
     c = _out()
     c.print()

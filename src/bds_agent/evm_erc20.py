@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from bds_agent.evm_tx import pending_nonce, send_transaction
+
 # Minimal ERC-20 transfer
 _ERC20_TRANSFER = [
     {
@@ -18,23 +20,6 @@ _ERC20_TRANSFER = [
         "type": "function",
     },
 ]
-
-
-def _fill_fees(w3: Any, base_tx: dict[str, Any]) -> None:
-    latest = w3.eth.get_block("latest")
-    base_fee = latest.get("baseFeePerGas")
-    if base_fee is not None:
-        try:
-            priority = w3.eth.max_priority_fee
-        except Exception:
-            priority = w3.to_wei(1, "gwei")
-        max_fee = int(base_fee) * 2 + int(priority)
-        base_tx["maxFeePerGas"] = max_fee
-        base_tx["maxPriorityFeePerGas"] = int(priority)
-        base_tx["type"] = 2
-    else:
-        base_tx["gasPrice"] = int(w3.eth.gas_price)
-        base_tx["type"] = 0
 
 
 def send_erc20_transfer(
@@ -66,7 +51,7 @@ def send_erc20_transfer(
         {
             "from": from_addr,
             "chainId": chain_id,
-            "nonce": w3.eth.get_transaction_count(from_addr),
+            "nonce": pending_nonce(w3, from_addr),
         },
     )
     try:
@@ -74,16 +59,8 @@ def send_erc20_transfer(
     except Exception:
         gas = 150_000
     base_tx["gas"] = int(math.ceil(gas * 1.15))
-    _fill_fees(w3, base_tx)
-    raw = w3.eth.account.sign_transaction(
-        base_tx,
-        private_key=private_key.strip(),
-    )
-    h = w3.eth.send_raw_transaction(raw.raw_transaction)
-    receipt = w3.eth.wait_for_transaction_receipt(h, timeout=300)
-    if receipt["status"] != 1:
-        raise RuntimeError("ERC-20 transfer reverted on-chain.")
-    return w3.to_hex(h)
+    tx_hash, _ = send_transaction(w3, private_key, base_tx)
+    return tx_hash
 
 
 NATIVE_VALUE_TOKEN_PLACEHOLDER = "0x0000000000000000000000000000000000000000"
@@ -118,20 +95,12 @@ def send_native_value_transfer(
         "to": to_addr,
         "value": int(value_wei),
         "chainId": chain_id,
-        "nonce": w3.eth.get_transaction_count(from_addr),
+        "nonce": pending_nonce(w3, from_addr),
     }
     try:
         gas = w3.eth.estimate_gas(base_tx)
     except Exception:
         gas = 21_000
     base_tx["gas"] = int(math.ceil(gas * 1.15))
-    _fill_fees(w3, base_tx)
-    raw = w3.eth.account.sign_transaction(
-        base_tx,
-        private_key=private_key.strip(),
-    )
-    h = w3.eth.send_raw_transaction(raw.raw_transaction)
-    receipt = w3.eth.wait_for_transaction_receipt(h, timeout=300)
-    if receipt["status"] != 1:
-        raise RuntimeError("Native transfer reverted on-chain.")
-    return w3.to_hex(h)
+    tx_hash, _ = send_transaction(w3, private_key, base_tx)
+    return tx_hash
